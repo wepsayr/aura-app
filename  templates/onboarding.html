@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Завершение регистрации — Aura</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#2196f3">
+    <style>
+        .onboarding-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+        }
+        .onboarding-nav button {
+            min-width: 100px;
+        }
+    </style>
+</head>
+<body class="theme-blue">
+    <div class="container">
+        <h1>💎 Aura</h1>
+        <p class="subtitle">Расскажи о себе, чтобы коуч работал точнее</p>
+
+        <form method="POST" id="onboardingForm">
+            <!-- Шаг 1: Имя и пол -->
+            <div class="step active" id="step1">
+                <h2>Шаг 1: О тебе</h2>
+                <label>Как тебя зовут?
+                    <input type="text" name="name" required placeholder="Например, Саша">
+                </label>
+                <div class="option-group">
+                    <p>Пол:</p>
+                    <div class="option selected" data-value="male" onclick="selectOption(this, 'gender')">Мужской</div>
+                    <div class="option" data-value="female" onclick="selectOption(this, 'gender')">Женский</div>
+                    <div class="option" data-value="other" onclick="selectOption(this, 'gender')">Другое</div>
+                    <input type="hidden" name="gender" id="genderInput" value="male">
+                </div>
+                <p style="font-size:0.8em; color:gray;">Это нужно для персонализации</p>
+                <div class="onboarding-nav">
+                    <span></span>
+                    <button type="button" onclick="nextStep(2)">Далее</button>
+                </div>
+            </div>
+
+            <!-- Шаг 2: Возраст -->
+            <div class="step" id="step2">
+                <h2>Шаг 2: Возраст</h2>
+                <label>Сколько тебе лет?
+                    <input type="number" name="age" min="12" max="100" required>
+                </label>
+                <div class="onboarding-nav">
+                    <button type="button" onclick="prevStep(1)">Назад</button>
+                    <button type="button" onclick="nextStep(3)">Далее</button>
+                </div>
+            </div>
+
+            <!-- Шаг 3: Тело -->
+            <div class="step" id="step3">
+                <h2>Шаг 3: Тело</h2>
+                <label>Рост (см): <input type="number" name="height" min="100" max="250" step="0.1" required></label>
+                <label>Вес (кг): <input type="number" name="weight" min="30" max="300" step="0.1" required></label>
+                <div class="onboarding-nav">
+                    <button type="button" onclick="prevStep(2)">Назад</button>
+                    <button type="button" onclick="nextStep(4)">Далее</button>
+                </div>
+            </div>
+
+            <!-- Шаг 4: Образ жизни -->
+            <div class="step" id="step4">
+                <h2>Шаг 4: Образ жизни</h2>
+                <div class="option-group">
+                    <p>Род занятий:</p>
+                    <div class="option selected" data-value="student" onclick="selectOption(this, 'activity')">Учусь</div>
+                    <div class="option" data-value="office" onclick="selectOption(this, 'activity')">Офис</div>
+                    <div class="option" data-value="physical" onclick="selectOption(this, 'activity')">Физическая работа</div>
+                    <div class="option" data-value="remote" onclick="selectOption(this, 'activity')">Удалённая</div>
+                    <div class="option" data-value="mixed" onclick="selectOption(this, 'activity')">Смешанное</div>
+                    <input type="hidden" name="activity" id="activityInput" value="student">
+                </div>
+                <div class="onboarding-nav">
+                    <button type="button" onclick="prevStep(3)">Назад</button>
+                    <button type="button" onclick="nextStep(5)">Далее</button>
+                </div>
+            </div>
+
+            <!-- Шаг 5: Приоритет -->
+            <div class="step" id="step5">
+                <h2>Шаг 5: Приоритет</h2>
+                <div class="option-group">
+                    <p>Что хочешь улучшить в первую очередь?</p>
+                    <div class="option selected" data-value="voice" onclick="selectOption(this, 'goal')">Голос и речь</div>
+                    <div class="option" data-value="posture" onclick="selectOption(this, 'goal')">Осанку</div>
+                    <div class="option" data-value="appearance" onclick="selectOption(this, 'goal')">Внешность и стиль</div>
+                    <div class="option" data-value="habits" onclick="selectOption(this, 'goal')">Избавиться от вредных привычек</div>
+                    <div class="option" data-value="all" onclick="selectOption(this, 'goal')">Всё сразу</div>
+                    <input type="hidden" name="goal" id="goalInput" value="voice">
+                </div>
+                <div class="onboarding-nav">
+                    <button type="button" onclick="prevStep(4)">Назад</button>
+                    <button type="submit">Завершить 🚀</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
+        let currentStep = 1;
+        function showStep(n) {
+            document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+            document.getElementById('step'+n).classList.add('active');
+            currentStep = n;
+        }
+        function nextStep(n) { showStep(n); }
+        function prevStep(n) { showStep(n); }
+
+        function selectOption(element, field) {
+            const group = element.parentNode;
+            group.querySelectorAll('.option').forEach(opt => opt.classList.remove('selected'));
+            element.classList.add('selected');
+            const value = element.getAttribute('data-value');
+            document.getElementById(field + 'Input').value = value;
+        }
+    </script>
+</body>
+</html>

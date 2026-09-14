@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Упражнения — Aura</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#2196f3">
+    <style>
+        .confetti-piece {
+            position: fixed;
+            top: -20px;
+            width: 10px;
+            height: 10px;
+            background-color: #2196f3;
+            opacity: 0.8;
+            z-index: 100;
+            animation: fall linear forwards;
+            pointer-events: none;
+        }
+        @keyframes fall {
+            0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+        .btn-small.delete { background: #ff9800; }
+        .completion-message {
+            background: #fff9c4;
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 600;
+            color: #1e3a5f;
+            animation: fadeIn 0.5s ease;
+        }
+        .habit-desc {
+            display: block;
+            font-size: 0.8em;
+            color: var(--text);
+            opacity: 0.8;
+            margin-top: 2px;
+        }
+        .xp-badge {
+            background: var(--primary);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            margin-left: 8px;
+            font-weight: 600;
+        }
+        .schedule-editor {
+            margin-top: 5px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        .schedule-editor label {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.75em;
+            cursor: pointer;
+        }
+        .schedule-editor input[type="checkbox"] {
+            margin: 0;
+        }
+        .btn-small.save-schedule {
+            background: #4caf50;
+            font-size: 0.7em;
+            padding: 4px 8px;
+        }
+    </style>
+</head>
+<body class="theme-{{ user.theme }}">
+    <div class="container">
+        <h1>💪 Упражнения</h1>
+        <a href="/dashboard" class="back-link">← На главную</a>
+
+        {% set total = habits | length %}
+        {% set completed_count = 0 %}
+        {% for h in habits %}
+            {% if h.progress >= h.target %}
+                {% set completed_count = completed_count + 1 %}
+            {% endif %}
+        {% endfor %}
+        {% if total > 0 and completed_count == total %}
+        <div class="completion-message">
+            {% if user.gender == 'male' %}
+                🎉 Ты сегодня всё сделал, молодец! Так держать!
+            {% elif user.gender == 'female' %}
+                🎉 Ты сегодня всё сделала, молодец! Так держать!
+            {% else %}
+                🎉 Ты сегодня всё выполнил(а), молодец! Так держать!
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="habits-list">
+            {% for habit in habits %}
+            <div class="habit-row">
+                <div class="habit-info">
+                    <span class="habit-name">
+                        {{ habit.habit_name }}
+                        <span class="xp-badge">+10 XP</span>
+                    </span>
+                    {% if habit.description %}
+                        <small class="habit-desc">{{ habit.description }}</small>
+                    {% endif %}
+                    <div class="progress-wrapper">
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: {{ (habit.progress / habit.target * 100) if habit.target > 0 else 0 }}%;"></div>
+                        </div>
+                        <span class="habit-stat">{{ habit.progress }}/{% if habit.target == habit.target|int %}{{ habit.target|int }}{% else %}{{ habit.target }}{% endif %} {{ habit.unit }}</span>
+                    </div>
+                    {% if habit.category != 'useful' %}
+                    <div class="schedule-editor" data-habit-id="{{ habit.id }}">
+                        {% set days = habit.schedule_days.split(',') if habit.schedule_days else ['1','2','3','4','5','6','7'] %}
+                        {% for day_num in range(1, 8) %}
+                            {% set day_name = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][day_num-1] %}
+                            <label>
+                                <input type="checkbox" value="{{ day_num }}" {% if day_num|string in days %}checked{% endif %}>
+                                {{ day_name }}
+                            </label>
+                        {% endfor %}
+                        <button class="btn-small save-schedule" onclick="saveSchedule({{ habit.id }})">💾</button>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="habit-actions">
+                    <input type="number" step="0.1" min="0" value="{{ habit.progress }}" id="input-{{ habit.id }}" data-target="{{ habit.target }}" class="habit-input">
+                    <button onclick="saveHabit({{ habit.id }})" class="btn-small">✓</button>
+                    <button onclick="resetHabit({{ habit.id }})" class="btn-small reset">↺</button>
+                    <button onclick="deleteHabit({{ habit.id }})" class="btn-small delete" title="Удалить навсегда">🗑️</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <nav class="bottom-nav">
+            <a href="/dashboard" class="nav-btn" title="Главная">🏠</a>
+            <a href="/habits" class="nav-btn active" title="Упражнения">💪</a>
+            {% if user.goal in ['habits', 'all'] %}
+            <a href="/bad_habits" class="nav-btn" title="Вредные">❌</a>
+            {% endif %}
+            {% if user.goal in ['voice', 'all'] %}
+            <a href="/voice" class="nav-btn" title="Голос">🎤</a>
+            {% endif %}
+            {% if user.goal in ['posture', 'all'] %}
+            <a href="/posture" class="nav-btn" title="Осанка">🧍</a>
+            {% endif %}
+            {% if user.goal in ['appearance', 'all'] %}
+            <a href="/style" class="nav-btn" title="Стиль">👔</a>
+            {% endif %}
+            <a href="/library" class="nav-btn" title="Библиотека">📚</a>
+            <a href="/profile" class="nav-btn" title="Профиль">👤</a>
+            <a href="/logout" class="nav-btn" title="Выйти" onclick="return confirm('Вы точно хотите выйти из аккаунта?');">🚪</a>
+        </nav>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
+        function launchConfetti() {
+            const colors = ['#2196f3', '#42a5f5', '#64b5f6', '#90caf9', '#1565c0', '#0d47a1', '#ffb74d', '#ff8a65'];
+            for (let i = 0; i < 60; i++) {
+                setTimeout(() => {
+                    const piece = document.createElement('div');
+                    piece.className = 'confetti-piece';
+                    piece.style.left = Math.random() * 100 + '%';
+                    piece.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                    piece.style.animationDuration = (Math.random() * 2 + 2) + 's';
+                    piece.style.width = (Math.random() * 8 + 6) + 'px';
+                    piece.style.height = (Math.random() * 8 + 6) + 'px';
+                    document.body.appendChild(piece);
+                    piece.addEventListener('animationend', () => {
+                        piece.remove();
+                    });
+                }, i * 12);
+            }
+        }
+
+        async function saveHabit(habitId) {
+            const input = document.getElementById('input-' + habitId);
+            const amount = parseFloat(input.value) || 0;
+            const target = parseFloat(input.getAttribute('data-target')) || 0;
+            const resp = await fetch('/log_habit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({habit_id: habitId, amount: amount})
+            });
+            if (resp.ok && amount >= target) {
+                launchConfetti();
+                setTimeout(() => {
+                    location.reload();
+                }, 2500);
+            } else {
+                location.reload();
+            }
+        }
+
+        async function resetHabit(habitId) {
+            if (!confirm('Сбросить прогресс по этой привычке?')) return;
+            await fetch('/reset_habit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({habit_id: habitId})
+            });
+            location.reload();
+        }
+
+        async function deleteHabit(habitId) {
+            if (!confirm('Удалить эту привычку навсегда? Все записи о ней исчезнут.')) return;
+            await fetch('/delete_habit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({habit_id: habitId})
+            });
+            location.reload();
+        }
+
+        async function saveSchedule(habitId) {
+            const container = document.querySelector(`.schedule-editor[data-habit-id="${habitId}"]`);
+            if (!container) return;
+            const checkboxes = container.querySelectorAll('input[type="checkbox"]:checked');
+            const days = Array.from(checkboxes).map(cb => cb.value).join(',');
+            const resp = await fetch('/update_schedule', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({habit_id: habitId, days: days})
+            });
+            if (resp.ok) {
+                alert('Расписание сохранено');
+            } else {
+                alert('Ошибка сохранения');
+            }
+        }
+    </script>
+</body>
+</html>

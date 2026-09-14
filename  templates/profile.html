@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Профиль — Aura</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#2196f3">
+</head>
+<body class="theme-{{ user.theme }}">
+    <div class="container">
+        <h1>👤 Профиль</h1>
+        <a href="/dashboard" class="back-link">← На главную</a>
+
+        <form method="POST" class="profile-form">
+            <label>Твоё имя:
+                <input type="text" name="name" value="{{ user.name or '' }}" placeholder="Введи имя">
+            </label>
+
+            <label>Возраст:
+                <input type="number" name="age" value="{{ user.age or '' }}" min="12" max="100">
+            </label>
+
+            <label>Пол:
+                <select name="gender">
+                    <option value="male" {% if user.gender == 'male' %}selected{% endif %}>Мужской</option>
+                    <option value="female" {% if user.gender == 'female' %}selected{% endif %}>Женский</option>
+                    <option value="other" {% if user.gender == 'other' %}selected{% endif %}>Другое</option>
+                </select>
+            </label>
+
+            <label>Рост (см):
+                <input type="number" name="height" value="{{ user.height or '' }}" step="0.1">
+            </label>
+
+            <label>Вес (кг):
+                <input type="number" name="weight" value="{{ user.weight or '' }}" step="0.1">
+            </label>
+
+            <label>Образ жизни:
+                <select name="activity">
+                    <option value="student" {% if user.activity == 'student' %}selected{% endif %}>Учусь</option>
+                    <option value="office" {% if user.activity == 'office' %}selected{% endif %}>Офис</option>
+                    <option value="physical" {% if user.activity == 'physical' %}selected{% endif %}>Физическая работа</option>
+                    <option value="remote" {% if user.activity == 'remote' %}selected{% endif %}>Удалённая</option>
+                    <option value="mixed" {% if user.activity == 'mixed' %}selected{% endif %}>Смешанное</option>
+                </select>
+            </label>
+
+            <label>Цель:
+                <select name="goal">
+                    <option value="voice" {% if user.goal == 'voice' %}selected{% endif %}>Голос и речь</option>
+                    <option value="posture" {% if user.goal == 'posture' %}selected{% endif %}>Осанка</option>
+                    <option value="appearance" {% if user.goal == 'appearance' %}selected{% endif %}>Внешность и стиль</option>
+                    <option value="habits" {% if user.goal == 'habits' %}selected{% endif %}>Избавиться от вредных привычек</option>
+                    <option value="all" {% if user.goal == 'all' %}selected{% endif %}>Всё сразу</option>
+                </select>
+            </label>
+
+            <label>Тема оформления:
+                <select name="theme">
+                    <option value="blue" {% if user.theme == 'blue' %}selected{% endif %}>Голубая</option>
+                    <option value="green" {% if user.theme == 'green' %}selected{% endif %}>Зелёная</option>
+                    <option value="purple" {% if user.theme == 'purple' %}selected{% endif %}>Фиолетовая</option>
+                    <option value="black" {% if user.theme == 'black' %}selected{% endif %}>Чёрная</option>
+                    <option value="red" {% if user.theme == 'red' %}selected{% endif %}>Красная</option>
+                    <option value="yellow" {% if user.theme == 'yellow' %}selected{% endif %}>Жёлтая</option>
+                    <option value="gray" {% if user.theme == 'gray' %}selected{% endif %}>Серая</option>
+                </select>
+            </label>
+
+            <button type="submit" class="btn-primary">Сохранить</button>
+        </form>
+
+        <p class="stats">Уровень {{ stats.level }} · XP {{ stats.xp }}</p>
+
+        <div style="text-align: center; margin-top: 20px;">
+            <a href="https://yoomoney.ru/to/ТВОЙ_НОМЕР_КОШЕЛЬКА" target="_blank" class="support-btn">💖 Поддержать проект</a>
+        </div>
+
+        <nav class="bottom-nav">
+            <a href="/dashboard" class="nav-btn" title="Главная">🏠</a>
+            <a href="/habits" class="nav-btn" title="Упражнения">💪</a>
+            {% if user.goal in ['habits', 'all'] %}
+            <a href="/bad_habits" class="nav-btn" title="Вредные">❌</a>
+            {% endif %}
+            {% if user.goal in ['voice', 'all'] %}
+            <a href="/voice" class="nav-btn" title="Голос">🎤</a>
+            {% endif %}
+            {% if user.goal in ['posture', 'all'] %}
+            <a href="/posture" class="nav-btn" title="Осанка">🧍</a>
+            {% endif %}
+            {% if user.goal in ['appearance', 'all'] %}
+            <a href="/style" class="nav-btn" title="Стиль">👔</a>
+            {% endif %}
+            <a href="/library" class="nav-btn" title="Библиотека">📚</a>
+            <a href="/profile" class="nav-btn active" title="Профиль">👤</a>
+            <a href="/logout" class="nav-btn" title="Выйти" onclick="return confirm('Вы точно хотите выйти из аккаунта?');">🚪</a>
+        </nav>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+    </script>
+</body>
+</html>

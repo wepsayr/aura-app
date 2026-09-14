@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Библиотека — Aura</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#2196f3">
+</head>
+<body class="theme-{{ user.theme }}">
+    <div class="container">
+        <h1>📚 Библиотека знаний</h1>
+        <a href="/dashboard" class="back-link">← На главную</a>
+
+        {% for category, subcategories in library.items() %}
+        <div class="library-category">
+            <h2>{{ category }}</h2>
+            {% for subcat, articles in subcategories.items() %}
+            <div class="library-subcategory">
+                <h3>{{ subcat }}</h3>
+                <div class="article-list">
+                    {% for article in articles %}
+                    <a href="{{ '/article/%d' % article.id if user_level >= article.level_required else '#' }}"
+                       class="article-card {% if user_level < article.level_required %}locked{% endif %}">
+                        <span class="article-title">{{ article.title }}</span>
+                        <span style="font-size:0.8em; color: var(--primary-dark);">
+                            {% if user_level >= article.level_required %}
+                                ✅ Доступно
+                            {% else %}
+                                🔒 Ур. {{ article.level_required }} ({{ article.level_required * 100 }} XP)
+                            {% endif %}
+                        </span>
+                        {% if user_level < article.level_required %}
+                            <span class="lock-icon">🔒</span>
+                        {% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+
+        <nav class="bottom-nav">
+            <a href="/dashboard" class="nav-btn" title="Главная">🏠</a>
+            <a href="/habits" class="nav-btn" title="Упражнения">💪</a>
+            {% if user.goal in ['habits', 'all'] %}
+            <a href="/bad_habits" class="nav-btn" title="Вредные">❌</a>
+            {% endif %}
+            {% if user.goal in ['voice', 'all'] %}
+            <a href="/voice" class="nav-btn" title="Голос">🎤</a>
+            {% endif %}
+            {% if user.goal in ['posture', 'all'] %}
+            <a href="/posture" class="nav-btn" title="Осанка">🧍</a>
+            {% endif %}
+            {% if user.goal in ['appearance', 'all'] %}
+            <a href="/style" class="nav-btn" title="Стиль">👔</a>
+            {% endif %}
+            <a href="/library" class="nav-btn active" title="Библиотека">📚</a>
+            <a href="/profile" class="nav-btn" title="Профиль">👤</a>
+            <a href="/logout" class="nav-btn" title="Выйти" onclick="return confirm('Вы точно хотите выйти из аккаунта?');">🚪</a>
+        </nav>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+    </script>
+</body>
+</html>

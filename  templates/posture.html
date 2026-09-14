@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Осанка — Aura</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#2196f3">
+</head>
+<body class="theme-{{ user.theme }}">
+    <div class="container">
+        <h1>🧍 Анализ осанки</h1>
+        <a href="/dashboard" class="back-link">← На главную</a>
+
+        <p><strong>Инструкция:</strong> Для точного анализа загрузите <u>три</u> фотографии:</p>
+        <ul>
+            <li>📷 <b>Анфас</b> – стоя прямо, руки вдоль тела</li>
+            <li>📷 <b>Профиль</b> – боком к камере, видна вся фигура</li>
+            <li>📷 <b>Вид сзади</b> – спина прямо, руки опущены</li>
+        </ul>
+        <p style="font-size:0.9em; color:gray;">Фотографируйте при хорошем освещении на нейтральном фоне.</p>
+
+        <form id="postureForm" class="posture-upload-form">
+            <div class="upload-row">
+                <label>📷 Анфас</label>
+                <input type="file" name="front" accept="image/*" required>
+                <img class="preview-img" id="previewFront" style="display:none;">
+            </div>
+            <div class="upload-row">
+                <label>📷 Профиль</label>
+                <input type="file" name="side" accept="image/*" required>
+                <img class="preview-img" id="previewSide" style="display:none;">
+            </div>
+            <div class="upload-row">
+                <label>📷 Сзади</label>
+                <input type="file" name="back" accept="image/*" required>
+                <img class="preview-img" id="previewBack" style="display:none;">
+            </div>
+            <button type="submit" class="btn-primary">🔍 Анализировать</button>
+        </form>
+        <p id="status"></p>
+
+        <div id="results" style="display: {{ 'block' if last_analysis else 'none' }};">
+            <h2>Результаты</h2>
+            <ul>
+                <li>Плечи (анфас): <span id="frontShoulder">{% if last_analysis %}{{ last_analysis.front_shoulder_tilt }}{% endif %}</span>°</li>
+                <li>Шея (анфас): <span id="frontNeck">{% if last_analysis %}{{ last_analysis.front_neck_tilt }}{% endif %}</span>°</li>
+                <li>Шея (профиль): <span id="sideNeck">{% if last_analysis %}{{ last_analysis.side_neck_tilt }}{% endif %}</span>°</li>
+                <li>Плечи (сзади): <span id="backShoulder">{% if last_analysis %}{{ last_analysis.back_shoulder_tilt }}{% endif %}</span>°</li>
+            </ul>
+            <div class="ai-tip">
+                🤖 Совет ИИ-коуча:
+                <p id="advice">{% if last_analysis %}{{ last_analysis.advice }}{% endif %}</p>
+            </div>
+            <div id="exercises">
+                <h3>🎯 Рекомендованные упражнения</h3>
+                <ul id="exerciseList">
+                    {% if last_analysis and last_analysis.exercises %}
+                        {% for ex in last_analysis.exercises %}
+                            <li>{{ ex }}</li>
+                        {% endfor %}
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+
+        <nav class="bottom-nav">
+            <a href="/dashboard" class="nav-btn" title="Главная">🏠</a>
+            <a href="/habits" class="nav-btn" title="Упражнения">💪</a>
+            {% if user.goal in ['habits', 'all'] %}
+            <a href="/bad_habits" class="nav-btn" title="Вредные">❌</a>
+            {% endif %}
+            {% if user.goal in ['voice', 'all'] %}
+            <a href="/voice" class="nav-btn" title="Голос">🎤</a>
+            {% endif %}
+            {% if user.goal in ['posture', 'all'] %}
+            <a href="/posture" class="nav-btn active" title="Осанка">🧍</a>
+            {% endif %}
+            {% if user.goal in ['appearance', 'all'] %}
+            <a href="/style" class="nav-btn" title="Стиль">👔</a>
+            {% endif %}
+            <a href="/library" class="nav-btn" title="Библиотека">📚</a>
+            <a href="/profile" class="nav-btn" title="Профиль">👤</a>
+            <a href="/logout" class="nav-btn" title="Выйти" onclick="return confirm('Вы точно хотите выйти из аккаунта?');">🚪</a>
+        </nav>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
+        document.querySelectorAll('.upload-row input[type=file]').forEach(input => {
+            input.addEventListener('change', function() {
+                const img = this.parentNode.querySelector('img');
+                if (this.files && this.files[0]) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        img.src = e.target.result;
+                        img.style.display = 'block';
+                    };
+                    reader.readAsDataURL(this.files[0]);
+                }
+            });
+        });
+
+        const form = document.getElementById('postureForm');
+        const statusP = document.getElementById('status');
+        const resultsDiv = document.getElementById('results');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            statusP.textContent = 'Анализируем...';
+            const formData = new FormData(form);
+            const resp = await fetch('/analyze_posture', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (data.error) {
+                statusP.textContent = 'Ошибка: ' + data.error;
+                return;
+            }
+            document.getElementById('frontShoulder').textContent = data.front_shoulder_tilt;
+            document.getElementById('frontNeck').textContent = data.front_neck_tilt;
+            document.getElementById('sideNeck').textContent = data.side_neck_tilt;
+            document.getElementById('backShoulder').textContent = data.back_shoulder_tilt;
+            document.getElementById('advice').textContent = data.advice;
+            const exList = document.getElementById('exerciseList');
+            exList.innerHTML = '';
+            data.exercises.forEach(ex => {
+                const li = document.createElement('li');
+                li.textContent = ex;
+                exList.appendChild(li);
+            });
+            resultsDiv.style.display = 'block';
+            statusP.textContent = 'Анализ завершён.';
+        });
+    </script>
+</body>
+</html>

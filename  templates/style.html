@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Стиль — Aura</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#2196f3">
+</head>
+<body class="theme-{{ user.theme }}">
+    <div class="container">
+        <h1>👔 Анализ стиля</h1>
+        <a href="/dashboard" class="back-link">← На главную</a>
+
+        <div class="style-controls" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <input type="file" id="photoInput" accept="image/*" style="flex: 1 1 120px; padding: 12px; border: 2px solid var(--border); border-radius: 12px; background: var(--card-bg);">
+            <button id="analyzeBtn" class="btn-primary" disabled style="flex: 1 1 120px;">🔍 Анализировать</button>
+        </div>
+
+        <p id="status" style="margin-top: 10px;">Выберите фото и нажмите «Анализировать»</p>
+        <img id="preview" style="display:none; max-width: 100%; margin-top: 10px; border-radius: 12px;">
+
+        <div id="results" style="display: {{ 'block' if last_analysis else 'none' }};">
+            <h2>Результаты</h2>
+            <ul>
+                <li>Форма лица: <span id="faceShape">{% if last_analysis %}{{ last_analysis.face_shape }}{% endif %}</span></li>
+                <li>Цветотип: <span id="skinTone">{% if last_analysis %}{{ last_analysis.skin_tone }}{% endif %}</span></li>
+                <li>Доминирующие цвета: <span id="colors">{% if last_analysis %}{{ last_analysis.dominant_colors }}{% endif %}</span></li>
+            </ul>
+            <div class="ai-tip">
+                🤖 Совет ИИ-коуча:
+                <p id="advice">{% if last_analysis %}{{ last_analysis.advice }}{% endif %}</p>
+            </div>
+            <div id="exercises">
+                <h3>🎯 Рекомендации</h3>
+                <ul id="exerciseList">
+                    {% if last_analysis and last_analysis.exercises %}
+                        {% for ex in last_analysis.exercises %}
+                            <li>{{ ex }}</li>
+                        {% endfor %}
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+
+        <nav class="bottom-nav">
+            <a href="/dashboard" class="nav-btn" title="Главная">🏠</a>
+            <a href="/habits" class="nav-btn" title="Упражнения">💪</a>
+            {% if user.goal in ['habits', 'all'] %}
+            <a href="/bad_habits" class="nav-btn" title="Вредные">❌</a>
+            {% endif %}
+            {% if user.goal in ['voice', 'all'] %}
+            <a href="/voice" class="nav-btn" title="Голос">🎤</a>
+            {% endif %}
+            {% if user.goal in ['posture', 'all'] %}
+            <a href="/posture" class="nav-btn" title="Осанка">🧍</a>
+            {% endif %}
+            {% if user.goal in ['appearance', 'all'] %}
+            <a href="/style" class="nav-btn active" title="Стиль">👔</a>
+            {% endif %}
+            <a href="/library" class="nav-btn" title="Библиотека">📚</a>
+            <a href="/profile" class="nav-btn" title="Профиль">👤</a>
+            <a href="/logout" class="nav-btn" title="Выйти" onclick="return confirm('Вы точно хотите выйти из аккаунта?');">🚪</a>
+        </nav>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
+        const photoInput = document.getElementById('photoInput');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const statusP = document.getElementById('status');
+        const preview = document.getElementById('preview');
+        const resultsDiv = document.getElementById('results');
+
+        {% if not last_analysis %}
+        resultsDiv.style.display = 'none';
+        {% endif %}
+
+        let selectedFile = null;
+
+        photoInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                selectedFile = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    preview.src = ev.target.result;
+                    preview.style.display = 'block';
+                };
+                reader.readAsDataURL(selectedFile);
+                analyzeBtn.disabled = false;
+            } else {
+                selectedFile = null;
+                preview.style.display = 'none';
+                analyzeBtn.disabled = true;
+            }
+        });
+
+        function typeWriter(element, text, speed = 40) {
+            let i = 0;
+            element.textContent = '';
+            function type() {
+                if (i < text.length) {
+                    element.textContent += text.charAt(i);
+                    i++;
+                    setTimeout(type, speed);
+                }
+            }
+            type();
+        }
+
+        analyzeBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+            statusP.textContent = 'Анализируем...';
+            const formData = new FormData();
+            formData.append('photo', selectedFile);
+            const resp = await fetch('/analyze_style', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (data.error) {
+                statusP.textContent = 'Ошибка: ' + data.error;
+                return;
+            }
+            document.getElementById('faceShape').textContent = data.face_shape;
+            document.getElementById('skinTone').textContent = data.skin_tone;
+            document.getElementById('colors').textContent = data.dominant_colors;
+            const adviceEl = document.getElementById('advice');
+            typeWriter(adviceEl, data.advice, 30);
+            const exList = document.getElementById('exerciseList');
+            exList.innerHTML = '';
+            data.exercises.forEach((ex, index) => {
+                const li = document.createElement('li');
+                exList.appendChild(li);
+                setTimeout(() => {
+                    typeWriter(li, ex, 30);
+                }, index * data.advice.length * 10);
+            });
+            resultsDiv.style.display = 'block';
+            statusP.textContent = 'Анализ завершён.';
+        });
+    </script>
+</body>
+</html>

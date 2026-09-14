@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вредные привычки — Aura</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#2196f3">
+</head>
+<body class="theme-{{ user.theme }}">
+    <div class="container">
+        <h1>❌ Вредные привычки</h1>
+        <a href="/dashboard" class="back-link">← На главную</a>
+
+        <div class="add-habit-form">
+            <input list="suggestions" id="newHabitName" placeholder="Название привычки" maxlength="50" autocomplete="off">
+            <datalist id="suggestions">
+                {% for s in suggestions %}
+                    <option value="{{ s }}">
+                {% endfor %}
+            </datalist>
+            <button onclick="addBadHabit()" class="btn-small">➕ Добавить</button>
+        </div>
+
+        <div class="habits-list">
+            {% for habit in bad_habits %}
+            <div class="habit-row bad-habit-row">
+                <div class="habit-info">
+                    <span class="habit-name">{{ habit.habit_name }}</span>
+                    <div class="streak-info">
+                        <span>🔥 Серия: {{ habit.current_streak }} дн.</span>
+                        <span>🏆 Лучшая: {{ habit.best_streak }} дн.</span>
+                    </div>
+                </div>
+                <div class="habit-actions">
+                    <button onclick="logBadHabit({{ habit.id }}, false)" class="btn-small check">✅</button>
+                    <button onclick="logBadHabit({{ habit.id }}, true)" class="btn-small relapse">💔 Срыв</button>
+                    <button onclick="deleteBadHabit({{ habit.id }})" class="btn-small delete">🗑️</button>
+                </div>
+            </div>
+            {% endfor %}
+            {% if not bad_habits %}
+                <p style="text-align:center; margin-top:30px;">Нет вредных привычек. Добавьте первую!</p>
+            {% endif %}
+        </div>
+
+        <nav class="bottom-nav">
+            <a href="/dashboard" class="nav-btn" title="Главная">🏠</a>
+            <a href="/habits" class="nav-btn" title="Упражнения">💪</a>
+            {% if user.goal in ['habits', 'all'] %}
+            <a href="/bad_habits" class="nav-btn active" title="Вредные">❌</a>
+            {% endif %}
+            {% if user.goal in ['voice', 'all'] %}
+            <a href="/voice" class="nav-btn" title="Голос">🎤</a>
+            {% endif %}
+            {% if user.goal in ['posture', 'all'] %}
+            <a href="/posture" class="nav-btn" title="Осанка">🧍</a>
+            {% endif %}
+            {% if user.goal in ['appearance', 'all'] %}
+            <a href="/style" class="nav-btn" title="Стиль">👔</a>
+            {% endif %}
+            <a href="/library" class="nav-btn" title="Библиотека">📚</a>
+            <a href="/profile" class="nav-btn" title="Профиль">👤</a>
+            <a href="/logout" class="nav-btn" title="Выйти" onclick="return confirm('Вы точно хотите выйти из аккаунта?');">🚪</a>
+        </nav>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
+        async function addBadHabit() {
+            const input = document.getElementById('newHabitName');
+            let name = input.value.trim();
+            if (!name) return alert('Введите название привычки');
+            name = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+            const resp = await fetch('/add_bad_habit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name: name })
+            });
+            if (resp.ok) {
+                location.reload();
+            } else {
+                const data = await resp.json();
+                alert(data.error || 'Ошибка добавления');
+            }
+        }
+
+        async function logBadHabit(habitId, isRelapse) {
+            if (isRelapse) {
+                if (!confirm('Отметить срыв? Серия обнулится.')) return;
+            }
+            const resp = await fetch('/log_bad_habit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ habit_id: habitId, is_relapse: isRelapse })
+            });
+            if (resp.ok) {
+                location.reload();
+            } else {
+                alert('Ошибка');
+            }
+        }
+
+        async function deleteBadHabit(habitId) {
+            if (!confirm('Удалить эту вредную привычку навсегда?')) return;
+            await fetch('/delete_bad_habit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ habit_id: habitId })
+            });
+            location.reload();
+        }
+    </script>
+</body>
+</html>
