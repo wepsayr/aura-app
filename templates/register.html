@@ -27,10 +27,13 @@
             <label>Придумай логин:
                 <input type="text" name="username" required minlength="3">
             </label>
+            <label>Твой email:
+                <input type="email" name="email" required placeholder="example@mail.ru">
+            </label>
             <label>Придумай пароль:
                 <input type="password" name="password" required minlength="4">
             </label>
-            <p style="font-size:0.8em; color:gray;">Пароль не короче 4 символов</p>
+            <p style="font-size:0.8em; color:gray;">Пароль не короче 4 символов. Email нужен для восстановления пароля.</p>
             <button type="submit" class="btn-primary">Продолжить</button>
         </form>
 
@@ -42,9 +45,6 @@
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/sw.js').catch(() => {});
-        }
-        if ('Notification' in window && Notification.permission === 'default') {
-            Notification.requestPermission();
         }
     </script>
 </body>
