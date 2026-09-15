@@ -268,12 +268,15 @@ def before_request():
     init_db()
     session.permanent = True
 
-# ---------- Отправка почты через Resend ----------
+# ---------- Отправка почты через Brevo API ----------
 def send_reset_email(to_email, reset_link):
-    """Отправляет письмо со ссылкой для сброса пароля через Resend API."""
-    RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
-    if not RESEND_API_KEY:
-        print("[MAIL] RESEND_API_KEY не задан", flush=True)
+    """Отправляет письмо со ссылкой для сброса пароля через Brevo HTTP API."""
+    BREVO_API_KEY = os.environ.get('BREVO_API_KEY')
+    BREVO_SENDER_EMAIL = os.environ.get('BREVO_SENDER_EMAIL', 'aura.coach@yandex.ru')
+    BREVO_SENDER_NAME = os.environ.get('BREVO_SENDER_NAME', 'Aura')
+
+    if not BREVO_API_KEY:
+        print("[MAIL] BREVO_API_KEY не задан", flush=True)
         return False
 
     html = f"""
@@ -296,26 +299,30 @@ def send_reset_email(to_email, reset_link):
     """
 
     try:
-        print(f"[MAIL] Отправляю письмо через Resend на {to_email}...", flush=True)
+        print(f"[MAIL] Отправляю письмо через Brevo на {to_email}...", flush=True)
         response = requests.post(
-            "https://api.resend.com/emails",
+            "https://api.brevo.com/v3/smtp/email",
             headers={
-                "Authorization": f"Bearer {RESEND_API_KEY}",
-                "Content-Type": "application/json"
+                "accept": "application/json",
+                "api-key": BREVO_API_KEY,
+                "content-type": "application/json"
             },
             json={
-                "from": "Aura <onboarding@resend.dev>",
-                "to": [to_email],
+                "sender": {
+                    "name": BREVO_SENDER_NAME,
+                    "email": BREVO_SENDER_EMAIL
+                },
+                "to": [{"email": to_email}],
                 "subject": "Сброс пароля в Aura",
-                "html": html
+                "htmlContent": html
             },
             timeout=15
         )
-        if response.status_code == 200:
-            print("[MAIL] Письмо успешно отправлено через Resend", flush=True)
+        if response.status_code in (200, 201, 202):
+            print("[MAIL] Письмо успешно отправлено через Brevo", flush=True)
             return True
         else:
-            print(f"[MAIL] Ошибка Resend: {response.status_code} — {response.text}", flush=True)
+            print(f"[MAIL] Ошибка Brevo: {response.status_code} — {response.text}", flush=True)
             return False
     except Exception as e:
         print(f"[MAIL] Ошибка отправки: {e}", flush=True)
@@ -540,7 +547,7 @@ def add_exercise_for_bad_habit(habit_name, user_id):
     if not exists:
         execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description) VALUES (%s,%s,%s,%s,%s,%s)',
                 (user_id, item['name'], 'exercise', item['target'], item['unit'], item['description']))
-    # ---------- Анализ голоса ----------
+# ---------- Анализ голоса ----------
 def analyze_audio(filepath):
     with wave.open(filepath, 'rb') as wf:
         n_channels = wf.getnchannels()
