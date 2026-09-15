@@ -19,13 +19,11 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-me')
 app.permanent_session_lifetime = timedelta(days=365)
 
-# --- Настройки почты (читаются из переменных окружения) ---
 MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
 MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
 MAIL_SERVER = os.environ.get('MAIL_SERVER', 'smtp.yandex.ru')
 MAIL_PORT = 465
 
-# --- Настройки базы данных ---
 DATA_DIR = os.environ.get('DATA_DIR', 'data')
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -179,7 +177,6 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
         ''')
-        # Добавляем недостающие колонки
         try:
             db.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
         except:
@@ -273,7 +270,7 @@ def before_request():
 def send_reset_email(to_email, reset_link):
     """Отправляет письмо со ссылкой для сброса пароля через Яндекс SMTP."""
     if not MAIL_USERNAME or not MAIL_PASSWORD:
-        print("SMTP не настроен: отсутствуют MAIL_USERNAME или MAIL_PASSWORD")
+        print("[MAIL] SMTP не настроен: отсутствуют MAIL_USERNAME или MAIL_PASSWORD")
         return False
 
     msg = MIMEMultipart('alternative')
@@ -317,13 +314,27 @@ def send_reset_email(to_email, reset_link):
     msg.attach(MIMEText(html, 'html'))
 
     try:
-        with smtplib.SMTP_SSL(MAIL_SERVER, MAIL_PORT) as server:
+        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:465 (SSL)...")
+        with smtplib.SMTP_SSL(MAIL_SERVER, 465, timeout=10) as server:
             server.login(MAIL_USERNAME, MAIL_PASSWORD)
             server.send_message(msg)
+        print("[MAIL] Письмо успешно отправлено через порт 465")
         return True
     except Exception as e:
-        print(f"Ошибка отправки письма: {e}")
-        return False
+        print(f"[MAIL] Порт 465 не сработал: {e}")
+
+    try:
+        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:587 (STARTTLS)...")
+        with smtplib.SMTP(MAIL_SERVER, 587, timeout=10) as server:
+            server.starttls()
+            server.login(MAIL_USERNAME, MAIL_PASSWORD)
+            server.send_message(msg)
+        print("[MAIL] Письмо успешно отправлено через порт 587")
+        return True
+    except Exception as e:
+        print(f"[MAIL] Порт 587 тоже не сработал: {e}")
+
+    return False
 
 def get_user():
     if 'user_id' in session:
