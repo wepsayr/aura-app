@@ -3,10 +3,8 @@ import uuid
 import wave
 import json
 import random
-import smtplib
 import secrets
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, flash
@@ -19,11 +17,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-me')
 app.permanent_session_lifetime = timedelta(days=365)
-
-MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
-MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
-MAIL_SERVER = os.environ.get('MAIL_SERVER', 'smtp.yandex.ru')
-MAIL_PORT = 465
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
@@ -49,7 +42,6 @@ def close_connection(exception):
         db.close()
 
 def query(sql, args=(), one=False):
-    """Выполняет SELECT, возвращает список словарей или один словарь."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     try:
@@ -60,7 +52,6 @@ def query(sql, args=(), one=False):
         cur.close()
 
 def execute(sql, args=(), returning=False):
-    """Выполняет INSERT/UPDATE/DELETE. Если returning=True — возвращает первую строку."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     try:
@@ -277,29 +268,13 @@ def before_request():
     init_db()
     session.permanent = True
 
-# ---------- Отправка почты ----------
+# ---------- Отправка почты через Resend ----------
 def send_reset_email(to_email, reset_link):
-    if not MAIL_USERNAME or not MAIL_PASSWORD:
-        print("[MAIL] SMTP не настроен", flush=True)
+    """Отправляет письмо со ссылкой для сброса пароля через Resend API."""
+    RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+    if not RESEND_API_KEY:
+        print("[MAIL] RESEND_API_KEY не задан", flush=True)
         return False
-
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = 'Сброс пароля в Aura'
-    msg['From'] = MAIL_USERNAME
-    msg['To'] = to_email
-
-    text = f"""Привет!
-
-Ты запросил сброс пароля в приложении Aura.
-
-Перейди по ссылке ниже, чтобы задать новый пароль:
-{reset_link}
-
-Ссылка действительна 15 минут.
-
-Если ты не запрашивал сброс, просто проигнорируй это письмо.
-
-С заботой, Aura 💎"""
 
     html = f"""
     <html>
@@ -314,36 +289,37 @@ def send_reset_email(to_email, reset_link):
             </a>
         </p>
         <p style="color: #888; font-size: 0.9em;">Ссылка действительна 15 минут.</p>
+        <p style="color: #888; font-size: 0.9em;">Если ты не запрашивал сброс, просто проигнорируй это письмо.</p>
         <p>С заботой, Aura 💎</p>
     </body>
     </html>
     """
 
-    msg.attach(MIMEText(text, 'plain'))
-    msg.attach(MIMEText(html, 'html'))
-
     try:
-        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:465 (SSL)...", flush=True)
-        with smtplib.SMTP_SSL(MAIL_SERVER, 465, timeout=10) as server:
-            server.login(MAIL_USERNAME, MAIL_PASSWORD)
-            server.send_message(msg)
-        print("[MAIL] Письмо успешно отправлено через порт 465", flush=True)
-        return True
+        print(f"[MAIL] Отправляю письмо через Resend на {to_email}...", flush=True)
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "from": "Aura <onboarding@resend.dev>",
+                "to": [to_email],
+                "subject": "Сброс пароля в Aura",
+                "html": html
+            },
+            timeout=15
+        )
+        if response.status_code == 200:
+            print("[MAIL] Письмо успешно отправлено через Resend", flush=True)
+            return True
+        else:
+            print(f"[MAIL] Ошибка Resend: {response.status_code} — {response.text}", flush=True)
+            return False
     except Exception as e:
-        print(f"[MAIL] Порт 465 не сработал: {e}", flush=True)
-
-    try:
-        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:587 (STARTTLS)...", flush=True)
-        with smtplib.SMTP(MAIL_SERVER, 587, timeout=10) as server:
-            server.starttls()
-            server.login(MAIL_USERNAME, MAIL_PASSWORD)
-            server.send_message(msg)
-        print("[MAIL] Письмо успешно отправлено через порт 587", flush=True)
-        return True
-    except Exception as e:
-        print(f"[MAIL] Порт 587 тоже не сработал: {e}", flush=True)
-
-    return False
+        print(f"[MAIL] Ошибка отправки: {e}", flush=True)
+        return False
 
 # ---------- Вспомогательные функции ----------
 def get_user():
@@ -391,7 +367,7 @@ def update_streak(user_id):
         new_streak = 1
     else:
         if isinstance(last, str):
-            last_date = datetime.strptime(last, '%Y-%m-%d').date()
+            last_date = datetime.strptime(last[:10], '%Y-%m-%d').date()
         else:
             last_date = last
         if last_date == today:
@@ -564,7 +540,7 @@ def add_exercise_for_bad_habit(habit_name, user_id):
     if not exists:
         execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description) VALUES (%s,%s,%s,%s,%s,%s)',
                 (user_id, item['name'], 'exercise', item['target'], item['unit'], item['description']))
-# ---------- Анализ голоса ----------
+    # ---------- Анализ голоса ----------
 def analyze_audio(filepath):
     with wave.open(filepath, 'rb') as wf:
         n_channels = wf.getnchannels()
