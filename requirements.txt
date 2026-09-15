@@ -1,1 +1,4 @@
-Flasknumpyopencv-python-headless
+Flask
+numpy
+opencv-python-headless
+psycopg2-binary
