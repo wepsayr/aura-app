@@ -16,7 +16,7 @@
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="ai-tip" style="background: #ffcdd2; color: #b71c1c;">
+                    <div class="ai-tip" style="background: {% if category == 'success' %}#c8e6c9{% else %}#ffcdd2{% endif %}; color: {% if category == 'success' %}#1b5e20{% else %}#b71c1c{% endif %};">
                         {{ message }}
                     </div>
                 {% endfor %}
@@ -34,6 +34,9 @@
         </form>
 
         <p style="text-align: center; margin-top: 20px;">
+            <a href="/forgot_password" style="color: var(--primary);">Забыли пароль?</a>
+        </p>
+        <p style="text-align: center; margin-top: 10px;">
             Нет аккаунта? <a href="/register" style="color: var(--primary);">Зарегистрироваться</a>
         </p>
     </div>
@@ -41,9 +44,6 @@
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/sw.js').catch(() => {});
-        }
-        if ('Notification' in window && Notification.permission === 'default') {
-            Notification.requestPermission();
         }
     </script>
 </body>
