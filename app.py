@@ -832,6 +832,17 @@ def analyze_posture(front_path, side_path, back_path):
 # ---------- Маршруты ----------
 @app.route('/')
 def splash():
+    # --- ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ КОД ---
+    try:
+        db = get_db()
+        all_users = db.execute('SELECT username, email FROM users').fetchall()
+        print("=== СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ ===", flush=True)
+        for u in all_users:
+            print(f"Логин: [{u['username']}] | Email: [{u['email']}]", flush=True)
+        print("=== КОНЕЦ СПИСКА ===", flush=True)
+    except Exception as e:
+        print(f"Ошибка отладки: {e}", flush=True)
+    # --- КОНЕЦ ВРЕМЕННОГО КОДА ---
     user = get_user()
     return render_template('splash.html', user=user)
 
