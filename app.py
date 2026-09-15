@@ -1,4 +1,3 @@
-import sqlite3
 import os
 import uuid
 import wave
@@ -13,6 +12,8 @@ from collections import defaultdict
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, flash
 import numpy as np
 import cv2
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -24,21 +25,21 @@ MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
 MAIL_SERVER = os.environ.get('MAIL_SERVER', 'smtp.yandex.ru')
 MAIL_PORT = 465
 
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
 DATA_DIR = os.environ.get('DATA_DIR', 'data')
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
 
-DATABASE = os.path.join(DATA_DIR, 'coach.db')
 UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
-
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# ---------- Работа с БД ----------
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
+        db = g._database = psycopg2.connect(DATABASE_URL)
     return db
 
 @app.teardown_appcontext
@@ -47,12 +48,37 @@ def close_connection(exception):
     if db is not None:
         db.close()
 
+def query(sql, args=(), one=False):
+    """Выполняет SELECT, возвращает список словарей или один словарь."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(sql, args)
+        result = cur.fetchall()
+        return (result[0] if result else None) if one else result
+    finally:
+        cur.close()
+
+def execute(sql, args=(), returning=False):
+    """Выполняет INSERT/UPDATE/DELETE. Если returning=True — возвращает первую строку."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(sql, args)
+        db.commit()
+        if returning and cur.description is not None:
+            return cur.fetchone()
+        return None
+    finally:
+        cur.close()
+
 def init_db():
     with app.app_context():
         db = get_db()
-        db.executescript('''
+        cur = db.cursor()
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 username TEXT UNIQUE,
                 password_hash TEXT,
                 email TEXT UNIQUE,
@@ -65,11 +91,13 @@ def init_db():
                 goal TEXT,
                 theme TEXT DEFAULT 'blue',
                 install_banner_closed INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS habits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
                 habit_name TEXT,
                 category TEXT,
                 target REAL,
@@ -77,135 +105,118 @@ def init_db():
                 frequency TEXT DEFAULT 'daily',
                 active INTEGER DEFAULT 1,
                 description TEXT,
-                schedule_days TEXT DEFAULT '1,2,3,4,5,6,7',
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                schedule_days TEXT DEFAULT '1,2,3,4,5,6,7'
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS habit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                habit_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                habit_id INTEGER REFERENCES habits(id),
                 date DATE,
                 amount REAL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (habit_id) REFERENCES habits(id)
-            );
+                timestamp TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS user_stats (
-                user_id INTEGER PRIMARY KEY,
+                user_id INTEGER PRIMARY KEY REFERENCES users(id),
                 xp INTEGER DEFAULT 0,
                 level INTEGER DEFAULT 1,
                 current_streak INTEGER DEFAULT 0,
                 best_streak INTEGER DEFAULT 0,
-                last_active_date DATE,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                last_active_date DATE
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS voice_analyses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
                 date DATE,
                 duration REAL,
                 rms REAL,
                 pauses_count INTEGER,
                 advice TEXT,
-                exercises TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                exercises TEXT
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS style_analyses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
                 date DATE,
                 face_shape TEXT,
                 skin_tone TEXT,
                 dominant_colors TEXT,
                 advice TEXT,
-                exercises TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                exercises TEXT
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS xp_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
                 habit_id INTEGER,
-                date DATE,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                date DATE
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS bad_habits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
                 habit_name TEXT,
                 current_streak INTEGER DEFAULT 0,
                 best_streak INTEGER DEFAULT 0,
                 last_active_date DATE,
-                active INTEGER DEFAULT 1,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                active INTEGER DEFAULT 1
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS bad_habit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                habit_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                habit_id INTEGER REFERENCES bad_habits(id),
                 date DATE,
-                is_relapse INTEGER DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (habit_id) REFERENCES bad_habits(id)
-            );
+                is_relapse INTEGER DEFAULT 0
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS posture_analyses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
                 date DATE,
                 front_shoulder_tilt REAL,
                 front_neck_tilt REAL,
                 side_neck_tilt REAL,
                 back_shoulder_tilt REAL,
                 advice TEXT,
-                exercises TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                exercises TEXT
+            )
+        ''')
+        cur.execute('''
             CREATE TABLE IF NOT EXISTS articles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
                 category TEXT,
                 subcategory TEXT,
                 level_required INTEGER DEFAULT 1,
                 gender_target TEXT DEFAULT 'all',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS password_reset_tokens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                token TEXT UNIQUE,
-                expires_at TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                created_at TIMESTAMP DEFAULT NOW()
+            )
         ''')
-        try:
-            db.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
-        except:
-            pass
-        try:
-            db.execute('ALTER TABLE users ADD COLUMN name TEXT')
-        except:
-            pass
-        try:
-            db.execute('ALTER TABLE users ADD COLUMN install_banner_closed INTEGER DEFAULT 0')
-        except:
-            pass
-        try:
-            db.execute('ALTER TABLE users ADD COLUMN email TEXT')
-        except:
-            pass
-        try:
-            db.execute('ALTER TABLE habits ADD COLUMN description TEXT')
-        except:
-            pass
-        try:
-            db.execute('ALTER TABLE habits ADD COLUMN schedule_days TEXT DEFAULT "1,2,3,4,5,6,7"')
-        except:
-            pass
-        try:
-            db.execute('ALTER TABLE voice_analyses ADD COLUMN exercises TEXT')
-        except:
-            pass
-        count = db.execute('SELECT COUNT(*) FROM articles').fetchone()[0]
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                token TEXT UNIQUE,
+                expires_at TIMESTAMP
+            )
+        ''')
+        db.commit()
+        cur.close()
+
+        count = query('SELECT COUNT(*) AS c FROM articles', one=True)['c']
         if count == 0:
             articles_data = [
                 ('Как голос влияет на первое впечатление',
@@ -258,19 +269,18 @@ def init_db():
                  'Вредные привычки', 'Курение', 5, 'all')
             ]
             for title, content, category, subcategory, lvl, gender in articles_data:
-                db.execute('INSERT INTO articles (title, content, category, subcategory, level_required, gender_target) VALUES (?,?,?,?,?,?)',
-                           (title, content, category, subcategory, lvl, gender))
-        db.commit()
+                execute('INSERT INTO articles (title, content, category, subcategory, level_required, gender_target) VALUES (%s,%s,%s,%s,%s,%s)',
+                        (title, content, category, subcategory, lvl, gender))
 
 @app.before_request
 def before_request():
     init_db()
     session.permanent = True
 
+# ---------- Отправка почты ----------
 def send_reset_email(to_email, reset_link):
-    """Отправляет письмо со ссылкой для сброса пароля через Яндекс SMTP."""
     if not MAIL_USERNAME or not MAIL_PASSWORD:
-        print("[MAIL] SMTP не настроен: отсутствуют MAIL_USERNAME или MAIL_PASSWORD")
+        print("[MAIL] SMTP не настроен", flush=True)
         return False
 
     msg = MIMEMultipart('alternative')
@@ -304,7 +314,6 @@ def send_reset_email(to_email, reset_link):
             </a>
         </p>
         <p style="color: #888; font-size: 0.9em;">Ссылка действительна 15 минут.</p>
-        <p style="color: #888; font-size: 0.9em;">Если ты не запрашивал сброс, просто проигнорируй это письмо.</p>
         <p>С заботой, Aura 💎</p>
     </body>
     </html>
@@ -314,50 +323,47 @@ def send_reset_email(to_email, reset_link):
     msg.attach(MIMEText(html, 'html'))
 
     try:
-        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:465 (SSL)...")
+        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:465 (SSL)...", flush=True)
         with smtplib.SMTP_SSL(MAIL_SERVER, 465, timeout=10) as server:
             server.login(MAIL_USERNAME, MAIL_PASSWORD)
             server.send_message(msg)
-        print("[MAIL] Письмо успешно отправлено через порт 465")
+        print("[MAIL] Письмо успешно отправлено через порт 465", flush=True)
         return True
     except Exception as e:
-        print(f"[MAIL] Порт 465 не сработал: {e}")
+        print(f"[MAIL] Порт 465 не сработал: {e}", flush=True)
 
     try:
-        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:587 (STARTTLS)...")
+        print(f"[MAIL] Пытаюсь подключиться к {MAIL_SERVER}:587 (STARTTLS)...", flush=True)
         with smtplib.SMTP(MAIL_SERVER, 587, timeout=10) as server:
             server.starttls()
             server.login(MAIL_USERNAME, MAIL_PASSWORD)
             server.send_message(msg)
-        print("[MAIL] Письмо успешно отправлено через порт 587")
+        print("[MAIL] Письмо успешно отправлено через порт 587", flush=True)
         return True
     except Exception as e:
-        print(f"[MAIL] Порт 587 тоже не сработал: {e}")
+        print(f"[MAIL] Порт 587 тоже не сработал: {e}", flush=True)
 
     return False
 
+# ---------- Вспомогательные функции ----------
 def get_user():
     if 'user_id' in session:
-        db = get_db()
-        return db.execute('SELECT * FROM users WHERE id = ?', (session['user_id'],)).fetchone()
+        return query('SELECT * FROM users WHERE id = %s', (session['user_id'],), one=True)
     return None
 
 def get_user_stats(user_id):
-    db = get_db()
-    stats = db.execute('SELECT * FROM user_stats WHERE user_id = ?', (user_id,)).fetchone()
+    stats = query('SELECT * FROM user_stats WHERE user_id = %s', (user_id,), one=True)
     if not stats:
-        db.execute('INSERT INTO user_stats (user_id) VALUES (?)', (user_id,))
-        db.commit()
-        stats = db.execute('SELECT * FROM user_stats WHERE user_id = ?', (user_id,)).fetchone()
+        execute('INSERT INTO user_stats (user_id) VALUES (%s)', (user_id,))
+        stats = query('SELECT * FROM user_stats WHERE user_id = %s', (user_id,), one=True)
     return stats
 
 def create_default_habits(user_id):
-    db = get_db()
-    user = db.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+    user = query('SELECT * FROM users WHERE id = %s', (user_id,), one=True)
     weight = user['weight'] or 70
     water_goal = round(weight * 0.033, 1)
     sleep_goal = 8 if user['age'] and user['age'] <= 25 else 7.5
-    existing = db.execute('SELECT habit_name FROM habits WHERE user_id = ?', (user_id,)).fetchall()
+    existing = query('SELECT habit_name FROM habits WHERE user_id = %s', (user_id,))
     existing_names = [row['habit_name'] for row in existing]
     defaults = [
         ('Вода', 'useful', water_goal, 'л', 'Пить достаточное количество воды для здоровья', '1,2,3,4,5,6,7'),
@@ -367,28 +373,27 @@ def create_default_habits(user_id):
     ]
     for name, cat, target, unit, desc, sched in defaults:
         if name not in existing_names:
-            db.execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description, schedule_days) VALUES (?,?,?,?,?,?,?)',
-                       (user_id, name, cat, target, unit, desc, sched))
-    db.commit()
+            execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description, schedule_days) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+                    (user_id, name, cat, target, unit, desc, sched))
 
 def add_xp(user_id, amount):
-    db = get_db()
-    db.execute('UPDATE user_stats SET xp = xp + ? WHERE user_id = ?', (amount, user_id))
+    execute('UPDATE user_stats SET xp = xp + %s WHERE user_id = %s', (amount, user_id))
     stats = get_user_stats(user_id)
     new_level = stats['xp'] // 100 + 1
     if new_level > stats['level']:
-        db.execute('UPDATE user_stats SET level = ? WHERE user_id = ?', (new_level, user_id))
-    db.commit()
+        execute('UPDATE user_stats SET level = %s WHERE user_id = %s', (new_level, user_id))
 
 def update_streak(user_id):
-    db = get_db()
     stats = get_user_stats(user_id)
     today = date.today()
     last = stats['last_active_date']
     if last is None:
         new_streak = 1
     else:
-        last_date = datetime.strptime(last, '%Y-%m-%d').date() if isinstance(last, str) else last
+        if isinstance(last, str):
+            last_date = datetime.strptime(last, '%Y-%m-%d').date()
+        else:
+            last_date = last
         if last_date == today:
             return
         elif last_date == today - timedelta(days=1):
@@ -396,26 +401,26 @@ def update_streak(user_id):
         else:
             new_streak = 1
     best = max(stats['best_streak'] or 0, new_streak)
-    db.execute('UPDATE user_stats SET current_streak = ?, best_streak = ?, last_active_date = ? WHERE user_id = ?',
-               (new_streak, best, today.isoformat(), user_id))
-    db.commit()
+    execute('UPDATE user_stats SET current_streak = %s, best_streak = %s, last_active_date = %s WHERE user_id = %s',
+            (new_streak, best, today.isoformat(), user_id))
     if new_streak > 0 and new_streak % 7 == 0:
         add_xp(user_id, 50)
 
 def get_today_habits(user_id):
-    db = get_db()
     today = date.today()
     weekday = today.isoweekday()
-    all_habits = db.execute('SELECT * FROM habits WHERE user_id = ? AND active = 1', (user_id,)).fetchall()
+    all_habits = query('SELECT * FROM habits WHERE user_id = %s AND active = 1', (user_id,))
     result = []
     for h in all_habits:
         sched = h['schedule_days'] or '1,2,3,4,5,6,7'
         days = [int(x.strip()) for x in sched.split(',') if x.strip().isdigit()]
         if weekday in days:
-            log = db.execute('SELECT amount FROM habit_log WHERE user_id=? AND habit_id=? AND date=?',
-                             (user_id, h['id'], today.isoformat())).fetchone()
+            log = query('SELECT amount FROM habit_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+                        (user_id, h['id'], today.isoformat()), one=True)
             done = log['amount'] if log else 0
-            result.append({**dict(h), 'progress': done})
+            row = dict(h)
+            row['progress'] = done
+            result.append(row)
     return result
 
 def get_today_summary(user_id):
@@ -427,7 +432,6 @@ def get_today_summary(user_id):
 def add_exercise_habits(user_id, exercises, schedule_days='1,2,3,4,5,6,7'):
     if not exercises:
         return
-    db = get_db()
     for item in exercises:
         if isinstance(item, str):
             name = item
@@ -443,29 +447,27 @@ def add_exercise_habits(user_id, exercises, schedule_days='1,2,3,4,5,6,7'):
                 schedule_days = item['schedule_days']
         if not name or "попробуйте" in name.lower() or "фотографи" in name.lower():
             continue
-        exists = db.execute('SELECT id FROM habits WHERE user_id=? AND habit_name=?', (user_id, name)).fetchone()
+        exists = query('SELECT id FROM habits WHERE user_id=%s AND habit_name=%s', (user_id, name), one=True)
         if not exists:
-            db.execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description, schedule_days) VALUES (?,?,?,?,?,?,?)',
-                       (user_id, name, 'exercise', target, unit, desc, schedule_days))
-    db.commit()
+            execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description, schedule_days) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+                    (user_id, name, 'exercise', target, unit, desc, schedule_days))
 
 def get_calendar_data(user_id):
-    db = get_db()
     today = date.today()
     days = []
     for i in range(6, -1, -1):
         d = today - timedelta(days=i)
-        habits = db.execute('SELECT * FROM habits WHERE user_id = ? AND active = 1', (user_id,)).fetchall()
+        habits = query('SELECT * FROM habits WHERE user_id = %s AND active = 1', (user_id,))
         total = len(habits)
         completed = 0
         has_relapse = False
         for h in habits:
-            log = db.execute('SELECT amount FROM habit_log WHERE user_id=? AND habit_id=? AND date=?',
-                             (user_id, h['id'], d.isoformat())).fetchone()
+            log = query('SELECT amount FROM habit_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+                        (user_id, h['id'], d.isoformat()), one=True)
             if log and log['amount'] >= h['target']:
                 completed += 1
-        bad_logs = db.execute('SELECT is_relapse FROM bad_habit_log WHERE user_id=? AND date=?',
-                              (user_id, d.isoformat())).fetchall()
+        bad_logs = query('SELECT is_relapse FROM bad_habit_log WHERE user_id=%s AND date=%s',
+                         (user_id, d.isoformat()))
         if any(l['is_relapse'] == 1 for l in bad_logs):
             has_relapse = True
         if total == 0:
@@ -491,7 +493,7 @@ def get_daily_tip(user):
     created = user['created_at']
     if created:
         if isinstance(created, str):
-            created = datetime.strptime(created, '%Y-%m-%d %H:%M:%S')
+            created = datetime.strptime(created[:19], '%Y-%m-%d %H:%M:%S')
         if created.date() == today:
             return "Добро пожаловать в Aura! Я помогу тебе раскрыть твою внутреннюю и внешнюю силу."
     tips = [
@@ -511,8 +513,7 @@ def get_daily_tip(user):
         "Забота о себе — это не эгоизм, а необходимость.",
         "Каждое выполненное упражнение делает тебя сильнее."
     ]
-    db = get_db()
-    bad = db.execute('SELECT habit_name FROM bad_habits WHERE user_id=? AND active=1', (user['id'],)).fetchall()
+    bad = query('SELECT habit_name FROM bad_habits WHERE user_id=%s AND active=1', (user['id'],))
     if bad:
         bad_names = [row['habit_name'] for row in bad]
         if any('курение' in h.lower() for h in bad_names):
@@ -559,12 +560,10 @@ def add_exercise_for_bad_habit(habit_name, user_id):
             'target': 1,
             'unit': 'раз'
         }
-    db = get_db()
-    exists = db.execute('SELECT id FROM habits WHERE user_id=? AND habit_name=?', (user_id, item['name'])).fetchone()
+    exists = query('SELECT id FROM habits WHERE user_id=%s AND habit_name=%s', (user_id, item['name']), one=True)
     if not exists:
-        db.execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description) VALUES (?,?,?,?,?,?)',
-                   (user_id, item['name'], 'exercise', item['target'], item['unit'], item['description']))
-        db.commit()
+        execute('INSERT INTO habits (user_id, habit_name, category, target, unit, description) VALUES (%s,%s,%s,%s,%s,%s)',
+                (user_id, item['name'], 'exercise', item['target'], item['unit'], item['description']))
 # ---------- Анализ голоса ----------
 def analyze_audio(filepath):
     with wave.open(filepath, 'rb') as wf:
@@ -832,17 +831,6 @@ def analyze_posture(front_path, side_path, back_path):
 # ---------- Маршруты ----------
 @app.route('/')
 def splash():
-    # --- ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ КОД ---
-    try:
-        db = get_db()
-        all_users = db.execute('SELECT username, email FROM users').fetchall()
-        print("=== СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ ===", flush=True)
-        for u in all_users:
-            print(f"Логин: [{u['username']}] | Email: [{u['email']}]", flush=True)
-        print("=== КОНЕЦ СПИСКА ===", flush=True)
-    except Exception as e:
-        print(f"Ошибка отладки: {e}", flush=True)
-    # --- КОНЕЦ ВРЕМЕННОГО КОДА ---
     user = get_user()
     return render_template('splash.html', user=user)
 
@@ -863,9 +851,7 @@ def close_install_banner():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
-    db.execute('UPDATE users SET install_banner_closed = 1 WHERE id = ?', (user['id'],))
-    db.commit()
+    execute('UPDATE users SET install_banner_closed = 1 WHERE id = %s', (user['id'],))
     return jsonify({'success': True})
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -877,17 +863,14 @@ def register():
         if not username or not email or len(password) < 4:
             flash('Заполни все поля, пароль от 4 символов', 'error')
             return render_template('register.html')
-        db = get_db()
-        existing = db.execute('SELECT id FROM users WHERE username = ? OR email = ?', (username, email)).fetchone()
+        existing = query('SELECT id FROM users WHERE username = %s OR email = %s', (username, email), one=True)
         if existing:
             flash('Такой логин или email уже занят', 'error')
             return render_template('register.html')
         password_hash = generate_password_hash(password)
-        db.execute('INSERT INTO users (username, email, password_hash) VALUES (?,?,?)',
-                   (username, email, password_hash))
-        user_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
-        session['user_id'] = user_id
-        db.commit()
+        new_user = execute('INSERT INTO users (username, email, password_hash) VALUES (%s,%s,%s) RETURNING id',
+                           (username, email, password_hash), returning=True)
+        session['user_id'] = new_user['id']
         return redirect(url_for('onboarding'))
     return render_template('register.html')
 
@@ -896,8 +879,7 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        db = get_db()
-        user = db.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+        user = query('SELECT * FROM users WHERE username = %s', (username,), one=True)
         if user and check_password_hash(user['password_hash'], password):
             session['user_id'] = user['id']
             return redirect(url_for('dashboard'))
@@ -909,14 +891,12 @@ def login():
 def forgot_password():
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
-        db = get_db()
-        user = db.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+        user = query('SELECT * FROM users WHERE email = %s', (email,), one=True)
         if user:
             token = secrets.token_urlsafe(32)
             expires_at = datetime.utcnow() + timedelta(minutes=15)
-            db.execute('INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?,?,?)',
-                       (user['id'], token, expires_at.strftime('%Y-%m-%d %H:%M:%S')))
-            db.commit()
+            execute('INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (%s,%s,%s)',
+                    (user['id'], token, expires_at.strftime('%Y-%m-%d %H:%M:%S')))
             reset_link = url_for('reset_password', token=token, _external=True)
             if send_reset_email(email, reset_link):
                 flash('Ссылка для сброса отправлена на почту', 'success')
@@ -929,16 +909,16 @@ def forgot_password():
 
 @app.route('/reset_password/<token>', methods=['GET', 'POST'])
 def reset_password(token):
-    db = get_db()
-    reset = db.execute('SELECT * FROM password_reset_tokens WHERE token = ?', (token,)).fetchone()
+    reset = query('SELECT * FROM password_reset_tokens WHERE token = %s', (token,), one=True)
     if not reset:
         flash('Недействительная ссылка для сброса пароля', 'error')
         return redirect(url_for('forgot_password'))
 
-    expires_at = datetime.strptime(reset['expires_at'], '%Y-%m-%d %H:%M:%S')
+    expires_at = reset['expires_at']
+    if isinstance(expires_at, str):
+        expires_at = datetime.strptime(expires_at[:19], '%Y-%m-%d %H:%M:%S')
     if datetime.utcnow() > expires_at:
-        db.execute('DELETE FROM password_reset_tokens WHERE id = ?', (reset['id'],))
-        db.commit()
+        execute('DELETE FROM password_reset_tokens WHERE id = %s', (reset['id'],))
         flash('Срок действия ссылки истёк. Запроси сброс заново.', 'error')
         return redirect(url_for('forgot_password'))
 
@@ -948,9 +928,8 @@ def reset_password(token):
             flash('Пароль должен быть не короче 4 символов', 'error')
             return render_template('reset_password.html', token=token)
         new_hash = generate_password_hash(new_password)
-        db.execute('UPDATE users SET password_hash = ? WHERE id = ?', (new_hash, reset['user_id']))
-        db.execute('DELETE FROM password_reset_tokens WHERE id = ?', (reset['id'],))
-        db.commit()
+        execute('UPDATE users SET password_hash = %s WHERE id = %s', (new_hash, reset['user_id']))
+        execute('DELETE FROM password_reset_tokens WHERE id = %s', (reset['id'],))
         flash('Пароль успешно изменён! Теперь войди с новым паролем.', 'success')
         return redirect(url_for('login'))
     return render_template('reset_password.html', token=token)
@@ -964,15 +943,13 @@ def onboarding():
         data = request.form
         name = data.get('name', '').strip()
         gender = data.get('gender', '')
-        age = data.get('age', '')
-        height = data.get('height', '')
-        weight = data.get('weight', '')
+        age = data.get('age') or None
+        height = data.get('height') or None
+        weight = data.get('weight') or None
         activity = data.get('activity', '')
         goal = data.get('goal', '')
-        db = get_db()
-        db.execute('''UPDATE users SET name=?, gender=?, age=?, height=?, weight=?, activity=?, goal=? WHERE id=?''',
-                   (name, gender, age, height, weight, activity, goal, user['id']))
-        db.commit()
+        execute('''UPDATE users SET name=%s, gender=%s, age=%s, height=%s, weight=%s, activity=%s, goal=%s WHERE id=%s''',
+                (name, gender, age, height, weight, activity, goal, user['id']))
         return redirect(url_for('dashboard'))
     return render_template('onboarding.html', user=user)
 
@@ -986,9 +963,9 @@ def habits():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    habits = get_today_habits(user['id'])
+    habits_list = get_today_habits(user['id'])
     stats = get_user_stats(user['id'])
-    return render_template('habits.html', user=user, habits=habits, stats=stats)
+    return render_template('habits.html', user=user, habits=habits_list, stats=stats)
 
 @app.route('/log_habit', methods=['POST'])
 def log_habit():
@@ -1000,42 +977,40 @@ def log_habit():
     amount = float(data.get('amount', 0))
     if not habit_id:
         return jsonify({'error': 'No habit_id'}), 400
-    db = get_db()
     today = date.today().isoformat()
-    existing = db.execute('SELECT id FROM habit_log WHERE user_id=? AND habit_id=? AND date=?',
-                          (user['id'], habit_id, today)).fetchone()
+    existing = query('SELECT id FROM habit_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+                     (user['id'], habit_id, today), one=True)
     if existing:
-        db.execute('UPDATE habit_log SET amount = ? WHERE id = ?', (amount, existing['id']))
+        execute('UPDATE habit_log SET amount = %s WHERE id = %s', (amount, existing['id']))
     else:
-        db.execute('INSERT INTO habit_log (user_id, habit_id, date, amount) VALUES (?,?,?,?)',
-                   (user['id'], habit_id, today, amount))
-    db.commit()
-    habit = db.execute('SELECT * FROM habits WHERE id = ?', (habit_id,)).fetchone()
+        execute('INSERT INTO habit_log (user_id, habit_id, date, amount) VALUES (%s,%s,%s,%s)',
+                (user['id'], habit_id, today, amount))
+
+    habit = query('SELECT * FROM habits WHERE id = %s', (habit_id,), one=True)
     if habit and amount >= habit['target']:
-        xp_entry = db.execute('SELECT id FROM xp_log WHERE user_id=? AND habit_id=? AND date=?',
-                              (user['id'], habit_id, today)).fetchone()
+        xp_entry = query('SELECT id FROM xp_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+                         (user['id'], habit_id, today), one=True)
         if not xp_entry:
             add_xp(user['id'], 10)
             update_streak(user['id'])
-            db.execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (?,?,?)',
-                       (user['id'], habit_id, today))
-            db.commit()
-    habits_all = db.execute('SELECT * FROM habits WHERE user_id = ? AND active = 1', (user['id'],)).fetchall()
+            execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (%s,%s,%s)',
+                    (user['id'], habit_id, today))
+
+    habits_all = query('SELECT * FROM habits WHERE user_id = %s AND active = 1', (user['id'],))
     all_done = True
     for h in habits_all:
-        log = db.execute('SELECT amount FROM habit_log WHERE user_id=? AND habit_id=? AND date=?',
-                         (user['id'], h['id'], today)).fetchone()
+        log = query('SELECT amount FROM habit_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+                    (user['id'], h['id'], today), one=True)
         if not log or log['amount'] < h['target']:
             all_done = False
             break
     if all_done:
-        bonus_entry = db.execute('SELECT id FROM xp_log WHERE user_id=? AND habit_id=0 AND date=?',
-                                 (user['id'], today)).fetchone()
+        bonus_entry = query('SELECT id FROM xp_log WHERE user_id=%s AND habit_id=0 AND date=%s',
+                            (user['id'], today), one=True)
         if not bonus_entry:
             add_xp(user['id'], 30)
-            db.execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (?,0,?)',
-                       (user['id'], today))
-            db.commit()
+            execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (%s,0,%s)',
+                    (user['id'], today))
     return jsonify({'success': True})
 
 @app.route('/reset_habit', methods=['POST'])
@@ -1045,11 +1020,9 @@ def reset_habit():
         return jsonify({'error': 'Not logged in'}), 403
     data = request.get_json()
     habit_id = data.get('habit_id')
-    db = get_db()
     today = date.today().isoformat()
-    db.execute('DELETE FROM habit_log WHERE user_id=? AND habit_id=? AND date=?',
-               (user['id'], habit_id, today))
-    db.commit()
+    execute('DELETE FROM habit_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+            (user['id'], habit_id, today))
     return jsonify({'success': True})
 
 @app.route('/delete_habit', methods=['POST'])
@@ -1061,10 +1034,8 @@ def delete_habit():
     habit_id = data.get('habit_id')
     if not habit_id:
         return jsonify({'error': 'No habit_id'}), 400
-    db = get_db()
-    db.execute('DELETE FROM habit_log WHERE habit_id=?', (habit_id,))
-    db.execute('DELETE FROM habits WHERE id=? AND user_id=?', (habit_id, user['id']))
-    db.commit()
+    execute('DELETE FROM habit_log WHERE habit_id=%s', (habit_id,))
+    execute('DELETE FROM habits WHERE id=%s AND user_id=%s', (habit_id, user['id']))
     return jsonify({'success': True})
 
 @app.route('/update_schedule', methods=['POST'])
@@ -1077,10 +1048,8 @@ def update_schedule():
     days = data.get('days', '')
     if not habit_id:
         return jsonify({'error': 'No habit_id'}), 400
-    db = get_db()
-    db.execute('UPDATE habits SET schedule_days = ? WHERE id = ? AND user_id = ?',
-               (days, habit_id, user['id']))
-    db.commit()
+    execute('UPDATE habits SET schedule_days = %s WHERE id = %s AND user_id = %s',
+            (days, habit_id, user['id']))
     return jsonify({'success': True})
 
 @app.route('/profile', methods=['GET', 'POST'])
@@ -1088,19 +1057,17 @@ def profile():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
-        age = request.form.get('age')
+        age = request.form.get('age') or None
         gender = request.form.get('gender')
-        height = request.form.get('height')
-        weight = request.form.get('weight')
+        height = request.form.get('height') or None
+        weight = request.form.get('weight') or None
         activity = request.form.get('activity')
         goal = request.form.get('goal')
         theme = request.form.get('theme', 'blue')
-        db.execute('''UPDATE users SET name=?, age=?, gender=?, height=?, weight=?, activity=?, goal=?, theme=? WHERE id=?''',
-                   (name, age, gender, height, weight, activity, goal, theme, user['id']))
-        db.commit()
+        execute('''UPDATE users SET name=%s, age=%s, gender=%s, height=%s, weight=%s, activity=%s, goal=%s, theme=%s WHERE id=%s''',
+                (name, age, gender, height, weight, activity, goal, theme, user['id']))
         return redirect(url_for('profile'))
     stats = get_user_stats(user['id'])
     return render_template('profile.html', user=user, stats=stats)
@@ -1110,10 +1077,9 @@ def voice():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
     today = date.today().isoformat()
-    last = db.execute('SELECT * FROM voice_analyses WHERE user_id=? AND date=? ORDER BY id DESC LIMIT 1',
-                      (user['id'], today)).fetchone()
+    last = query('SELECT * FROM voice_analyses WHERE user_id=%s AND date=%s ORDER BY id DESC LIMIT 1',
+                 (user['id'], today), one=True)
     last_analysis = None
     if last:
         try:
@@ -1147,12 +1113,10 @@ def analyze_voice():
     except Exception as e:
         os.remove(filepath)
         return jsonify({'error': f'Audio analysis failed: {str(e)}'}), 500
-    db = get_db()
-    db.execute('INSERT INTO voice_analyses (user_id, date, duration, rms, pauses_count, advice, exercises) VALUES (?,?,?,?,?,?,?)',
-               (user['id'], date.today().isoformat(), analysis['duration'], analysis['rms'],
-                analysis['pauses'], analysis['advice'], json.dumps(analysis['exercises'])))
+    execute('INSERT INTO voice_analyses (user_id, date, duration, rms, pauses_count, advice, exercises) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+            (user['id'], date.today().isoformat(), analysis['duration'], analysis['rms'],
+             analysis['pauses'], analysis['advice'], json.dumps(analysis['exercises'])))
     add_exercise_habits(user['id'], analysis['exercises'])
-    db.commit()
     add_xp(user['id'], 15)
     update_streak(user['id'])
     os.remove(filepath)
@@ -1163,10 +1127,9 @@ def style():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
     today = date.today().isoformat()
-    last = db.execute('SELECT * FROM style_analyses WHERE user_id=? AND date=? ORDER BY id DESC LIMIT 1',
-                      (user['id'], today)).fetchone()
+    last = query('SELECT * FROM style_analyses WHERE user_id=%s AND date=%s ORDER BY id DESC LIMIT 1',
+                 (user['id'], today), one=True)
     last_analysis = None
     if last:
         try:
@@ -1200,13 +1163,11 @@ def analyze_style_route():
     except Exception as e:
         os.remove(filepath)
         return jsonify({'error': f'Style analysis failed: {str(e)}'}), 500
-    db = get_db()
-    db.execute('''INSERT INTO style_analyses (user_id, date, face_shape, skin_tone, dominant_colors, advice, exercises)
-                  VALUES (?,?,?,?,?,?,?)''',
-               (user['id'], date.today().isoformat(), analysis['face_shape'], analysis['skin_tone'],
-                analysis['dominant_colors'], analysis['advice'], json.dumps(analysis['exercises'])))
+    execute('''INSERT INTO style_analyses (user_id, date, face_shape, skin_tone, dominant_colors, advice, exercises)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)''',
+            (user['id'], date.today().isoformat(), analysis['face_shape'], analysis['skin_tone'],
+             analysis['dominant_colors'], analysis['advice'], json.dumps(analysis['exercises'])))
     add_exercise_habits(user['id'], analysis['exercises'])
-    db.commit()
     add_xp(user['id'], 15)
     update_streak(user['id'])
     os.remove(filepath)
@@ -1217,10 +1178,9 @@ def posture():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
     today = date.today().isoformat()
-    last = db.execute('SELECT * FROM posture_analyses WHERE user_id=? AND date=? ORDER BY id DESC LIMIT 1',
-                      (user['id'], today)).fetchone()
+    last = query('SELECT * FROM posture_analyses WHERE user_id=%s AND date=%s ORDER BY id DESC LIMIT 1',
+                 (user['id'], today), one=True)
     last_analysis = None
     if last:
         try:
@@ -1262,14 +1222,12 @@ def analyze_posture_route():
             if os.path.exists(p):
                 os.remove(p)
         return jsonify({'error': f'Ошибка анализа: {str(e)}'}), 500
-    db = get_db()
-    db.execute('''INSERT INTO posture_analyses (user_id, date, front_shoulder_tilt, front_neck_tilt, side_neck_tilt, back_shoulder_tilt, advice, exercises)
-                  VALUES (?,?,?,?,?,?,?,?)''',
-               (user['id'], date.today().isoformat(), analysis['front_shoulder_tilt'], analysis['front_neck_tilt'],
-                analysis['side_neck_tilt'], analysis['back_shoulder_tilt'], analysis['advice'],
-                json.dumps(analysis['exercises'])))
+    execute('''INSERT INTO posture_analyses (user_id, date, front_shoulder_tilt, front_neck_tilt, side_neck_tilt, back_shoulder_tilt, advice, exercises)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''',
+            (user['id'], date.today().isoformat(), analysis['front_shoulder_tilt'], analysis['front_neck_tilt'],
+             analysis['side_neck_tilt'], analysis['back_shoulder_tilt'], analysis['advice'],
+             json.dumps(analysis['exercises'])))
     add_exercise_habits(user['id'], analysis['exercises'])
-    db.commit()
     add_xp(user['id'], 15)
     update_streak(user['id'])
     for p in [front_path, side_path, back_path]:
@@ -1282,9 +1240,8 @@ def bad_habits():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
-    habits = db.execute('SELECT * FROM bad_habits WHERE user_id=? AND active=1', (user['id'],)).fetchall()
-    return render_template('bad_habits.html', user=user, bad_habits=habits, suggestions=SUGGESTIONS)
+    habits_list = query('SELECT * FROM bad_habits WHERE user_id=%s AND active=1', (user['id'],))
+    return render_template('bad_habits.html', user=user, bad_habits=habits_list, suggestions=SUGGESTIONS)
 
 @app.route('/add_bad_habit', methods=['POST'])
 def add_bad_habit():
@@ -1296,12 +1253,10 @@ def add_bad_habit():
     if not name:
         return jsonify({'error': 'Empty name'}), 400
     name = normalize_habit_name(name)
-    db = get_db()
-    exists = db.execute('SELECT id FROM bad_habits WHERE user_id=? AND habit_name=?', (user['id'], name)).fetchone()
+    exists = query('SELECT id FROM bad_habits WHERE user_id=%s AND habit_name=%s', (user['id'], name), one=True)
     if exists:
         return jsonify({'error': 'Уже есть такая привычка'}), 400
-    db.execute('INSERT INTO bad_habits (user_id, habit_name) VALUES (?,?)', (user['id'], name))
-    db.commit()
+    execute('INSERT INTO bad_habits (user_id, habit_name) VALUES (%s,%s)', (user['id'], name))
     add_exercise_for_bad_habit(name, user['id'])
     return jsonify({'success': True})
 
@@ -1315,37 +1270,38 @@ def log_bad_habit():
     is_relapse = data.get('is_relapse', False)
     if not habit_id:
         return jsonify({'error': 'No habit_id'}), 400
-    db = get_db()
     today = date.today()
 
-    log = db.execute('SELECT id, is_relapse FROM bad_habit_log WHERE user_id=? AND habit_id=? AND date=?',
-                     (user['id'], habit_id, today.isoformat())).fetchone()
+    log = query('SELECT id, is_relapse FROM bad_habit_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+                (user['id'], habit_id, today.isoformat()), one=True)
     if log:
         if not is_relapse and log['is_relapse'] == 1:
-            db.execute('UPDATE bad_habit_log SET is_relapse=0 WHERE id=?', (log['id'],))
+            execute('UPDATE bad_habit_log SET is_relapse=0 WHERE id=%s', (log['id'],))
         elif is_relapse and log['is_relapse'] == 0:
-            db.execute('UPDATE bad_habit_log SET is_relapse=1 WHERE id=?', (log['id'],))
-        db.commit()
+            execute('UPDATE bad_habit_log SET is_relapse=1 WHERE id=%s', (log['id'],))
     else:
-        db.execute('INSERT INTO bad_habit_log (user_id, habit_id, date, is_relapse) VALUES (?,?,?,?)',
-                   (user['id'], habit_id, today.isoformat(), 1 if is_relapse else 0))
-        db.commit()
+        execute('INSERT INTO bad_habit_log (user_id, habit_id, date, is_relapse) VALUES (%s,%s,%s,%s)',
+                (user['id'], habit_id, today.isoformat(), 1 if is_relapse else 0))
 
-    habit = db.execute('SELECT * FROM bad_habits WHERE id=?', (habit_id,)).fetchone()
+    habit = query('SELECT * FROM bad_habits WHERE id=%s', (habit_id,), one=True)
     if not habit:
         return jsonify({'error': 'Habit not found'}), 404
-    logs = db.execute('SELECT date, is_relapse FROM bad_habit_log WHERE habit_id=? AND user_id=? ORDER BY date ASC',
-                      (habit_id, user['id'])).fetchall()
+    logs = query('SELECT date, is_relapse FROM bad_habit_log WHERE habit_id=%s AND user_id=%s ORDER BY date ASC',
+                 (habit_id, user['id']))
     current_streak = 0
     best_streak = habit['best_streak']
     if logs:
-        sorted_logs = sorted(logs, key=lambda x: x['date'])
+        def to_date(x):
+            if isinstance(x, str):
+                return datetime.strptime(x[:10], '%Y-%m-%d').date()
+            return x
+        sorted_logs = sorted(logs, key=lambda x: to_date(x['date']))
         streak = 0
         last_date = None
         for entry in reversed(sorted_logs):
             if entry['is_relapse'] == 1:
                 break
-            cur_date = datetime.strptime(entry['date'], '%Y-%m-%d').date()
+            cur_date = to_date(entry['date'])
             if last_date is None:
                 streak = 1
                 last_date = cur_date
@@ -1363,27 +1319,25 @@ def log_bad_habit():
                 temp_streak = 0
                 prev_date = None
             else:
-                cur_date = datetime.strptime(entry['date'], '%Y-%m-%d').date()
+                cur_date = to_date(entry['date'])
                 if prev_date is None or (cur_date - prev_date).days == 1:
                     temp_streak += 1
                 else:
                     temp_streak = 1
                 prev_date = cur_date
                 max_streak = max(max_streak, temp_streak)
-        best_streak = max(habit['best_streak'], max_streak)
+        best_streak = max(habit['best_streak'] or 0, max_streak)
 
-    db.execute('UPDATE bad_habits SET current_streak=?, best_streak=?, last_active_date=? WHERE id=?',
-               (current_streak, best_streak, today.isoformat(), habit_id))
-    db.commit()
+    execute('UPDATE bad_habits SET current_streak=%s, best_streak=%s, last_active_date=%s WHERE id=%s',
+            (current_streak, best_streak, today.isoformat(), habit_id))
 
     if not is_relapse:
-        xp_today = db.execute('SELECT id FROM xp_log WHERE user_id=? AND habit_id=? AND date=?',
-                              (user['id'], -habit_id, today.isoformat())).fetchone()
+        xp_today = query('SELECT id FROM xp_log WHERE user_id=%s AND habit_id=%s AND date=%s',
+                         (user['id'], -habit_id, today.isoformat()), one=True)
         if not xp_today:
             add_xp(user['id'], 5)
-            db.execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (?,?,?)',
-                       (user['id'], -habit_id, today.isoformat()))
-            db.commit()
+            execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (%s,%s,%s)',
+                    (user['id'], -habit_id, today.isoformat()))
 
     return jsonify({'success': True, 'streak': current_streak, 'best': best_streak})
 
@@ -1396,10 +1350,8 @@ def delete_bad_habit():
     habit_id = data.get('habit_id')
     if not habit_id:
         return jsonify({'error': 'No habit_id'}), 400
-    db = get_db()
-    db.execute('DELETE FROM bad_habit_log WHERE habit_id=?', (habit_id,))
-    db.execute('DELETE FROM bad_habits WHERE id=? AND user_id=?', (habit_id, user['id']))
-    db.commit()
+    execute('DELETE FROM bad_habit_log WHERE habit_id=%s', (habit_id,))
+    execute('DELETE FROM bad_habits WHERE id=%s AND user_id=%s', (habit_id, user['id']))
     return jsonify({'success': True})
 
 @app.route('/library')
@@ -1407,12 +1359,11 @@ def library():
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
     stats = get_user_stats(user['id'])
     user_level = stats['level']
     user_gender = user['gender'] if user['gender'] in ('male', 'female') else 'all'
-    articles = db.execute('SELECT * FROM articles WHERE gender_target IN (?, "all") ORDER BY category, subcategory, level_required',
-                          (user_gender,)).fetchall()
+    articles = query('SELECT * FROM articles WHERE gender_target IN (%s, \'all\') ORDER BY category, subcategory, level_required',
+                     (user_gender,))
     library_data = {}
     for art in articles:
         cat = art['category'] if art['category'] else 'Общее'
@@ -1433,16 +1384,15 @@ def article(article_id):
     user = get_user()
     if not user:
         return redirect(url_for('login'))
-    db = get_db()
-    article = db.execute('SELECT * FROM articles WHERE id = ?', (article_id,)).fetchone()
-    if not article:
+    art = query('SELECT * FROM articles WHERE id = %s', (article_id,), one=True)
+    if not art:
         return "Статья не найдена", 404
     stats = get_user_stats(user['id'])
-    if stats['level'] < article['level_required']:
+    if stats['level'] < art['level_required']:
         return "Недостаточно уровня для просмотра", 403
-    if article['gender_target'] not in ('all', user['gender'] if user['gender'] in ('male', 'female') else 'all'):
+    if art['gender_target'] not in ('all', user['gender'] if user['gender'] in ('male', 'female') else 'all'):
         return "Статья недоступна для вашего пола", 403
-    return render_template('article.html', user=user, article=article)
+    return render_template('article.html', user=user, article=art)
 
 @app.route('/get_status')
 def get_status():
