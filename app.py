@@ -4,6 +4,10 @@ import uuid
 import wave
 import json
 import random
+import smtplib
+import secrets
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, flash
@@ -12,14 +16,25 @@ import cv2
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = 'supersecretkey_change_me'
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-me')
 app.permanent_session_lifetime = timedelta(days=365)
 
-DATABASE = 'coach.db'
-UPLOAD_FOLDER = 'uploads'
+# --- Настройки почты (читаются из переменных окружения) ---
+MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
+MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
+MAIL_SERVER = os.environ.get('MAIL_SERVER', 'smtp.yandex.ru')
+MAIL_PORT = 465
+
+# --- Настройки базы данных ---
+DATA_DIR = os.environ.get('DATA_DIR', 'data')
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+DATABASE = os.path.join(DATA_DIR, 'coach.db')
+UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
 
 if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def get_db():
     db = getattr(g, '_database', None)
@@ -42,6 +57,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE,
                 password_hash TEXT,
+                email TEXT UNIQUE,
                 name TEXT,
                 age INTEGER,
                 gender TEXT,
@@ -155,7 +171,15 @@ def init_db():
                 gender_target TEXT DEFAULT 'all',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                token TEXT UNIQUE,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
         ''')
+        # Добавляем недостающие колонки
         try:
             db.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
         except:
@@ -166,6 +190,10 @@ def init_db():
             pass
         try:
             db.execute('ALTER TABLE users ADD COLUMN install_banner_closed INTEGER DEFAULT 0')
+        except:
+            pass
+        try:
+            db.execute('ALTER TABLE users ADD COLUMN email TEXT')
         except:
             pass
         try:
@@ -223,7 +251,7 @@ def init_db():
                  'Найди икону стиля, которая тебе нравится, и проанализируй, что именно привлекает. Адаптируй эти элементы под себя. Не бойся ошибаться — стиль вырабатывается с опытом.',
                  'Стиль', 'Гардероб', 6, 'all'),
                 ('Как избавиться от привычки грызть ногти',
-                 'Привычка грызть ногти часто связана с тревожностью. Попробуй заменить её на другое действие: носи с собой маникюрный набор, увлажняющий крем или эспандер. Каждый раз, когда хочется погрызть ногти, делай 5 глубоких вдохов.',
+                 'Привычка грызть ногти часто связана с тревожностью. Попробуй заменить её на другое действие: носи с собой маникюрный набор, увлажняющий крем или эспандер. Каждый раз, когда хочется погрызть ноги, делай 5 глубоких вдохов.',
                  'Вредные привычки', 'Грызть ногти', 2, 'all'),
                 ('Как отказаться от алкоголя: первые шаги',
                  'Отказ от алкоголя начинается с осознания триггеров. Замени вечерний бокал вина на травяной чай. Найди поддержку среди друзей или в сообществах. Помни: каждый день без алкоголя делает твою кожу чище, а сон крепче.',
@@ -241,6 +269,61 @@ def init_db():
 def before_request():
     init_db()
     session.permanent = True
+
+def send_reset_email(to_email, reset_link):
+    """Отправляет письмо со ссылкой для сброса пароля через Яндекс SMTP."""
+    if not MAIL_USERNAME or not MAIL_PASSWORD:
+        print("SMTP не настроен: отсутствуют MAIL_USERNAME или MAIL_PASSWORD")
+        return False
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = 'Сброс пароля в Aura'
+    msg['From'] = MAIL_USERNAME
+    msg['To'] = to_email
+
+    text = f"""Привет!
+
+Ты запросил сброс пароля в приложении Aura.
+
+Перейди по ссылке ниже, чтобы задать новый пароль:
+{reset_link}
+
+Ссылка действительна 15 минут.
+
+Если ты не запрашивал сброс, просто проигнорируй это письмо.
+
+С заботой, Aura 💎"""
+
+    html = f"""
+    <html>
+    <body style="font-family: Segoe UI, sans-serif; color: #1e3a5f;">
+        <h2 style="color: #1565c0;">Сброс пароля в Aura</h2>
+        <p>Привет!</p>
+        <p>Ты запросил сброс пароля в приложении Aura.</p>
+        <p>Перейди по ссылке ниже, чтобы задать новый пароль:</p>
+        <p style="margin: 20px 0;">
+            <a href="{reset_link}" style="background: #2196f3; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">
+                Сбросить пароль
+            </a>
+        </p>
+        <p style="color: #888; font-size: 0.9em;">Ссылка действительна 15 минут.</p>
+        <p style="color: #888; font-size: 0.9em;">Если ты не запрашивал сброс, просто проигнорируй это письмо.</p>
+        <p>С заботой, Aura 💎</p>
+    </body>
+    </html>
+    """
+
+    msg.attach(MIMEText(text, 'plain'))
+    msg.attach(MIMEText(html, 'html'))
+
+    try:
+        with smtplib.SMTP_SSL(MAIL_SERVER, MAIL_PORT) as server:
+            server.login(MAIL_USERNAME, MAIL_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Ошибка отправки письма: {e}")
+        return False
 
 def get_user():
     if 'user_id' in session:
@@ -585,23 +668,11 @@ def get_dominant_colors(image_path, k=3):
 
 def analyze_style(filepath):
     if not os.path.exists(filepath):
-        return {
-            'face_shape': 'файл не найден',
-            'skin_tone': '',
-            'dominant_colors': '',
-            'advice': 'Не удалось найти загруженное фото. Попробуйте ещё раз.',
-            'exercises': []
-        }
+        return {'face_shape': 'файл не найден', 'skin_tone': '', 'dominant_colors': '', 'advice': 'Не удалось найти загруженное фото. Попробуйте ещё раз.', 'exercises': []}
 
     img = cv2.imread(filepath)
     if img is None:
-        return {
-            'face_shape': 'не удалось определить',
-            'skin_tone': '',
-            'dominant_colors': '',
-            'advice': 'Не удалось открыть фото. Убедитесь, что загружаете правильный файл изображения (JPEG, PNG).',
-            'exercises': []
-        }
+        return {'face_shape': 'не удалось определить', 'skin_tone': '', 'dominant_colors': '', 'advice': 'Не удалось открыть фото. Убедитесь, что загружаете правильный файл изображения (JPEG, PNG).', 'exercises': []}
 
     try:
         colors = get_dominant_colors(filepath, 3)
@@ -779,17 +850,19 @@ def close_install_banner():
 def register():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
+        email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
-        if not username or len(password) < 4:
-            flash('Логин обязателен, пароль от 4 символов', 'error')
+        if not username or not email or len(password) < 4:
+            flash('Заполни все поля, пароль от 4 символов', 'error')
             return render_template('register.html')
         db = get_db()
-        existing = db.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
+        existing = db.execute('SELECT id FROM users WHERE username = ? OR email = ?', (username, email)).fetchone()
         if existing:
-            flash('Такой логин уже занят', 'error')
+            flash('Такой логин или email уже занят', 'error')
             return render_template('register.html')
         password_hash = generate_password_hash(password)
-        db.execute('INSERT INTO users (username, password_hash) VALUES (?,?)', (username, password_hash))
+        db.execute('INSERT INTO users (username, email, password_hash) VALUES (?,?,?)',
+                   (username, email, password_hash))
         user_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
         session['user_id'] = user_id
         db.commit()
@@ -809,6 +882,56 @@ def login():
         else:
             flash('Неверный логин или пароль', 'error')
     return render_template('login.html')
+
+@app.route('/forgot_password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        db = get_db()
+        user = db.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+        if user:
+            token = secrets.token_urlsafe(32)
+            expires_at = datetime.utcnow() + timedelta(minutes=15)
+            db.execute('INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?,?,?)',
+                       (user['id'], token, expires_at.strftime('%Y-%m-%d %H:%M:%S')))
+            db.commit()
+            reset_link = url_for('reset_password', token=token, _external=True)
+            if send_reset_email(email, reset_link):
+                flash('Ссылка для сброса отправлена на почту', 'success')
+            else:
+                flash('Не удалось отправить письмо. Проверь настройки почты.', 'error')
+        else:
+            flash('Если такой email зарегистрирован, письмо будет отправлено', 'success')
+        return redirect(url_for('forgot_password'))
+    return render_template('forgot_password.html')
+
+@app.route('/reset_password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    db = get_db()
+    reset = db.execute('SELECT * FROM password_reset_tokens WHERE token = ?', (token,)).fetchone()
+    if not reset:
+        flash('Недействительная ссылка для сброса пароля', 'error')
+        return redirect(url_for('forgot_password'))
+
+    expires_at = datetime.strptime(reset['expires_at'], '%Y-%m-%d %H:%M:%S')
+    if datetime.utcnow() > expires_at:
+        db.execute('DELETE FROM password_reset_tokens WHERE id = ?', (reset['id'],))
+        db.commit()
+        flash('Срок действия ссылки истёк. Запроси сброс заново.', 'error')
+        return redirect(url_for('forgot_password'))
+
+    if request.method == 'POST':
+        new_password = request.form.get('new_password', '')
+        if len(new_password) < 4:
+            flash('Пароль должен быть не короче 4 символов', 'error')
+            return render_template('reset_password.html', token=token)
+        new_hash = generate_password_hash(new_password)
+        db.execute('UPDATE users SET password_hash = ? WHERE id = ?', (new_hash, reset['user_id']))
+        db.execute('DELETE FROM password_reset_tokens WHERE id = ?', (reset['id'],))
+        db.commit()
+        flash('Пароль успешно изменён! Теперь войди с новым паролем.', 'success')
+        return redirect(url_for('login'))
+    return render_template('reset_password.html', token=token)
 
 @app.route('/onboarding', methods=['GET', 'POST'])
 def onboarding():
@@ -865,7 +988,6 @@ def log_habit():
         db.execute('INSERT INTO habit_log (user_id, habit_id, date, amount) VALUES (?,?,?,?)',
                    (user['id'], habit_id, today, amount))
     db.commit()
-
     habit = db.execute('SELECT * FROM habits WHERE id = ?', (habit_id,)).fetchone()
     if habit and amount >= habit['target']:
         xp_entry = db.execute('SELECT id FROM xp_log WHERE user_id=? AND habit_id=? AND date=?',
@@ -876,7 +998,6 @@ def log_habit():
             db.execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (?,?,?)',
                        (user['id'], habit_id, today))
             db.commit()
-
     habits_all = db.execute('SELECT * FROM habits WHERE user_id = ? AND active = 1', (user['id'],)).fetchall()
     all_done = True
     for h in habits_all:
@@ -893,7 +1014,6 @@ def log_habit():
             db.execute('INSERT INTO xp_log (user_id, habit_id, date) VALUES (?,0,?)',
                        (user['id'], today))
             db.commit()
-
     return jsonify({'success': True})
 
 @app.route('/reset_habit', methods=['POST'])
@@ -1135,7 +1255,6 @@ def analyze_posture_route():
             os.remove(p)
     return jsonify(analysis)
 
-# ---------- Модуль вредных привычек ----------
 @app.route('/bad_habits')
 def bad_habits():
     user = get_user()
@@ -1214,7 +1333,6 @@ def log_bad_habit():
             else:
                 break
         current_streak = streak
-
         max_streak = 0
         temp_streak = 0
         prev_date = None
@@ -1262,7 +1380,6 @@ def delete_bad_habit():
     db.commit()
     return jsonify({'success': True})
 
-# ---------- Библиотека ----------
 @app.route('/library')
 def library():
     user = get_user()
